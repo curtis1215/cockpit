@@ -16,5 +16,9 @@ inventory.local.yaml
 .env
 *.local
 
+# Go binaries
+/cockpit-bin
+dist/
+
 # OS
 .DS_Store
