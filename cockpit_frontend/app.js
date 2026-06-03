@@ -442,6 +442,9 @@
       job.status = e.data;           // "success" | "failed" | "aborted"
       job.finished_at = new Date().toISOString();
       try { await loadInstalls(); await loadJobs(); } catch (_) {}
+      // SSE done 只給 status；從剛刷新的 JOBS 回填版本/退出碼，避免「已更新至 undefined」
+      const fresh = JOBS.find((j) => j.id === job.id);
+      if (fresh) { job.new_version = fresh.new_version; job.exit_code = fresh.exit_code; }
       finishJob(job);
       render();
       renderRecentJobs();
