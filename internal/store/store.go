@@ -121,3 +121,243 @@ func (s *Store) ListSystems() ([]System, error) {
 	}
 	return out, rows.Err()
 }
+
+// ── Version tracker types and methods ───────────────────────────────────────
+
+type Version struct {
+	Software, VersionStr, ReleasedAt, ChangelogRaw, ChangelogZh string
+}
+type Install struct {
+	Software, Machine, CurrentVersion, Status, LastChecked string
+}
+type Job struct {
+	ID                                          int64
+	Software, Machine, Kind, Runner, Status     string
+	StartedAt, FinishedAt                       string
+	ExitCode                                    int
+	NewVersion, Log, Cmd, Cwd, CurrentCmd, VRgx string
+	AbortRequested                              bool
+}
+
+func nullStr(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func (s *Store) AddVersion(software, ver, released, raw, zh string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO versions (software,version,released_at,changelog_raw,changelog_zh) VALUES (?,?,?,?,?)
+		 ON CONFLICT(software,version) DO UPDATE SET released_at=excluded.released_at,
+		   changelog_raw=excluded.changelog_raw,
+		   changelog_zh=COALESCE(excluded.changelog_zh, versions.changelog_zh)`,
+		software, ver, nullStr(released), raw, nullStr(zh))
+	return err
+}
+
+func (s *Store) GetVersion(software, ver string) (Version, error) {
+	var v Version
+	var rel, raw, zh sql.NullString
+	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh FROM versions WHERE software=? AND version=?`, software, ver).
+		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh)
+	if err == sql.ErrNoRows {
+		return Version{}, ErrNotFound
+	}
+	v.ReleasedAt, v.ChangelogRaw, v.ChangelogZh = rel.String, raw.String, zh.String
+	return v, err
+}
+
+func (s *Store) LatestVersion(software string) (Version, error) {
+	var v Version
+	var rel, raw, zh sql.NullString
+	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh FROM versions WHERE software=? ORDER BY rowid DESC LIMIT 1`, software).
+		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh)
+	if err == sql.ErrNoRows {
+		return Version{}, ErrNotFound
+	}
+	v.ReleasedAt, v.ChangelogRaw, v.ChangelogZh = rel.String, raw.String, zh.String
+	return v, err
+}
+
+func (s *Store) LatestVersionMap() map[string]string {
+	out := map[string]string{}
+	rows, err := s.db.Query(`SELECT software,version FROM versions ORDER BY rowid`)
+	if err != nil {
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a, b string
+		rows.Scan(&a, &b)
+		out[a] = b
+	}
+	return out
+}
+
+func (s *Store) UpsertInstall(software, machine, cur, status, lastChecked string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO installs (software,machine,current_version,status,last_checked) VALUES (?,?,?,?,?)
+		 ON CONFLICT(software,machine) DO UPDATE SET current_version=excluded.current_version,
+		   status=excluded.status, last_checked=excluded.last_checked`,
+		software, machine, nullStr(cur), status, lastChecked)
+	return err
+}
+
+func (s *Store) GetInstall(software, machine string) (Install, error) {
+	var i Install
+	var cur, lc sql.NullString
+	err := s.db.QueryRow(`SELECT software,machine,current_version,status,last_checked FROM installs WHERE software=? AND machine=?`, software, machine).
+		Scan(&i.Software, &i.Machine, &cur, &i.Status, &lc)
+	if err == sql.ErrNoRows {
+		return Install{}, ErrNotFound
+	}
+	i.CurrentVersion, i.LastChecked = cur.String, lc.String
+	return i, err
+}
+
+func (s *Store) ListInstalls() ([]Install, error) {
+	rows, err := s.db.Query(`SELECT software,machine,current_version,status,last_checked FROM installs ORDER BY software,machine`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Install
+	for rows.Next() {
+		var i Install
+		var cur, lc sql.NullString
+		rows.Scan(&i.Software, &i.Machine, &cur, &i.Status, &lc)
+		i.CurrentVersion, i.LastChecked = cur.String, lc.String
+		out = append(out, i)
+	}
+	return out, rows.Err()
+}
+
+// CreateJobUnique creates a job only if no queued/running job exists for (software,machine).
+// Returns the new job ID, or 0 if a duplicate exists.
+func (s *Store) CreateJobUnique(software, machine, kind, runner string) (int64, error) {
+	var existing int
+	err := s.db.QueryRow(`SELECT 1 FROM jobs WHERE software=? AND machine=? AND status IN ('queued','running') LIMIT 1`, software, machine).Scan(&existing)
+	if err == nil {
+		return 0, nil
+	}
+	if err != sql.ErrNoRows {
+		return 0, err
+	}
+	res, err := s.db.Exec(`INSERT INTO jobs (software,machine,kind,runner) VALUES (?,?,?,?)`, software, machine, kind, nullStr(runner))
+	if err != nil {
+		return 0, err
+	}
+	return res.LastInsertId()
+}
+
+func (s *Store) ClaimOldestQueued(machine string) (*Job, error) {
+	var id int64
+	err := s.db.QueryRow(`SELECT id FROM jobs WHERE machine=? AND status='queued' ORDER BY id LIMIT 1`, machine).Scan(&id)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.db.Exec(`UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=?`, id); err != nil {
+		return nil, err
+	}
+	j, err := s.GetJob(id)
+	return &j, err
+}
+
+func (s *Store) SetJobDispatch(id int64, cmd, cwd, currentCmd, vrgx string) error {
+	_, err := s.db.Exec(`UPDATE jobs SET cmd=?, cwd=?, current_cmd=?, version_regex=? WHERE id=?`,
+		nullStr(cmd), nullStr(cwd), nullStr(currentCmd), nullStr(vrgx), id)
+	return err
+}
+
+func (s *Store) GetJob(id int64) (Job, error) {
+	var j Job
+	var runner, started, finished, newv, cmd, cwd, ccmd, vrgx sql.NullString
+	var exit sql.NullInt64
+	err := s.db.QueryRow(`SELECT id,software,machine,kind,runner,status,started_at,finished_at,exit_code,new_version,log,cmd,cwd,current_cmd,version_regex,abort_requested FROM jobs WHERE id=?`, id).
+		Scan(&j.ID, &j.Software, &j.Machine, &j.Kind, &runner, &j.Status, &started, &finished, &exit, &newv, &j.Log, &cmd, &cwd, &ccmd, &vrgx, &j.AbortRequested)
+	if err == sql.ErrNoRows {
+		return Job{}, ErrNotFound
+	}
+	j.Runner, j.StartedAt, j.FinishedAt, j.NewVersion = runner.String, started.String, finished.String, newv.String
+	j.Cmd, j.Cwd, j.CurrentCmd, j.VRgx, j.ExitCode = cmd.String, cwd.String, ccmd.String, vrgx.String, int(exit.Int64)
+	return j, err
+}
+
+func (s *Store) ListJobs(limit int) ([]Job, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs ORDER BY id DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	var out []Job
+	for _, id := range ids {
+		j, err := s.GetJob(id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, nil
+}
+
+func (s *Store) AppendJobLog(id int64, line string) error {
+	_, err := s.db.Exec(`UPDATE jobs SET log = log || ? || char(10) WHERE id=?`, line, id)
+	return err
+}
+
+func (s *Store) FinishJob(id int64, status string, exit int, newVersion string) error {
+	_, err := s.db.Exec(`UPDATE jobs SET status=?, exit_code=?, new_version=?, finished_at=datetime('now') WHERE id=?`,
+		status, exit, nullStr(newVersion), id)
+	return err
+}
+
+func (s *Store) RequestAbort(id int64) error {
+	_, err := s.db.Exec(`UPDATE jobs SET abort_requested=1 WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) AbortRequested(id int64) bool {
+	var v int
+	s.db.QueryRow(`SELECT abort_requested FROM jobs WHERE id=?`, id).Scan(&v)
+	return v != 0
+}
+
+func (s *Store) AddEvent(typ, software, machine, detail string) error {
+	_, err := s.db.Exec(`INSERT INTO events (type,software,machine,detail) VALUES (?,?,?,?)`, typ, nullStr(software), nullStr(machine), detail)
+	return err
+}
+
+func (s *Store) LastError(software, machine string) string {
+	var d sql.NullString
+	s.db.QueryRow(`SELECT detail FROM events WHERE type='error' AND software=? AND machine=? ORDER BY id DESC LIMIT 1`, software, machine).Scan(&d)
+	return d.String
+}
+
+func (s *Store) SetCheckRequested(machine string) error {
+	_, err := s.db.Exec(`INSERT INTO machine_state (machine,check_requested,updated_at) VALUES (?,1,datetime('now'))
+		ON CONFLICT(machine) DO UPDATE SET check_requested=1, updated_at=datetime('now')`, machine)
+	return err
+}
+
+func (s *Store) TakeCheckRequested(machine string) bool {
+	var v int
+	s.db.QueryRow(`SELECT check_requested FROM machine_state WHERE machine=?`, machine).Scan(&v)
+	if v != 0 {
+		s.db.Exec(`UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=?`, machine)
+		return true
+	}
+	return false
+}
