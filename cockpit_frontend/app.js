@@ -14,7 +14,6 @@
 
   /* ---- module-level mutable state (loaded from real APIs) ---- */
   let INSTALLS = [], MACHINES = [], JOBS = [];
-  const JOB_SCRIPTS = {}; // FE-2 將移除模擬腳本；先留空物件避免引用爆炸
 
   async function api(path, opts) {
     const r = await fetch(path, opts);
@@ -61,7 +60,7 @@
     filters: { machine: "", onlyUpdates: false, q: "" },
     group: "flat",            // flat | machine | status
     activeJobId: null,
-    streamTimers: {},          // 每個 job 各自的計時器 → 支援多 job 並行串流
+    streams: {},               // 每個 job 各自的 EventSource → 支援多 job 並行串流
     layout: "side",            // side | bottom
   };
 
@@ -392,21 +391,30 @@
   document.querySelectorAll("[data-layout-btn]").forEach((b) =>
     b.addEventListener("click", () => setLayout(b.getAttribute("data-layout-btn"))));
 
-  function startUpdate(id) {
-    const it = state.installs.find((i) => i.id === id);
-    if (!it || it.status !== "behind") return;
-
-    // [API] POST /api/jobs {install_id:id} → 回 job_id；下面是 prototype 模擬
-    const script = JOB_SCRIPTS[it.software] || JOB_SCRIPTS._command;
+  async function startUpdate(id) {
+    const it = state.installs.find((i) => i.id === id) || INSTALLS.find((i) => i.id === id);
+    if (!it) return;
+    const [sw, machine] = id.split("::");
+    let resp;
+    try {
+      resp = await api(`/api/installs/${encodeURIComponent(sw)}/${encodeURIComponent(machine)}/update`, { method: "POST" });
+    } catch (e) {
+      if (e.status === 409) {
+        toast("warn", `${sw} 已有進行中的更新`);
+      } else if (e.status === 404) {
+        toast("err", `找不到 ${sw} 的安裝記錄`);
+      } else {
+        toast("err", `觸發更新失敗：${e.message}`);
+      }
+      return;
+    }
     const job = {
-      id: "job_" + Date.now().toString().slice(-6),
-      software: it.software, machine: it.machine,
-      kind: script.kind,
-      runner: script.runner || null,
-      prompt: script.prompt || null,
+      id: String(resp.job_id),
+      software: sw,
+      machine: machine,
+      kind: it.update_kind || "command",
       status: "running",
-      new_version: script.new_version || it.latest_version,
-      installId: it.id,
+      installId: id,
       started_at: new Date().toISOString(),
       log: [],
     };
@@ -417,57 +425,79 @@
     render();
     renderCurrentJob(job);
     openDrawer();
-    streamJob(job, script);
+    streamJob(job);
   }
 
-  function streamJob(job, script) {
-    let i = 0;
-    const step = () => {
-      if (job.status !== "running") return;            // 被中止則停止
-      if (i >= script.lines.length) return finishJob(job, script);
-      job.log.push(script.lines[i].s);
-      appendLogLine(job, script.lines[i].s);
-      i++;
-      state.streamTimers[job.id] = setTimeout(step, script.lines[i - 1].t);
+  function streamJob(job) {
+    const es = new EventSource(`/api/jobs/${job.id}/log/stream`);
+    state.streams = state.streams || {};
+    state.streams[job.id] = es;
+    es.addEventListener("log", (e) => {
+      job.log.push(e.data);
+      appendLogLine(job, e.data);
+    });
+    es.addEventListener("done", async (e) => {
+      es.close();
+      delete state.streams[job.id];
+      job.status = e.data;           // "success" | "failed" | "aborted"
+      job.finished_at = new Date().toISOString();
+      try { await loadInstalls(); await loadJobs(); } catch (_) {}
+      finishJob(job);
+      render();
+      renderRecentJobs();
+    });
+    es.addEventListener("error", (e) => {
+      // SSE 錯誤事件（job 找不到等）：關閉，不重連
+      if (e.data) {
+        job.log.push(`[error] ${e.data}`);
+        appendLogLine(job, `[error] ${e.data}`);
+      }
+      es.close();
+      delete state.streams?.[job.id];
+    });
+    es.onerror = () => {
+      // 連線中斷：關閉，不無限重連
+      es.close();
+      if (state.streams) delete state.streams[job.id];
     };
-    // [API] 真實版：const es = new EventSource(`/api/jobs/${job.id}/stream`);
-    //        es.onmessage = e => { job.log.push(e.data); appendLogLine(job, e.data); };
-    //        es.addEventListener("done", e => finishJob(job, JSON.parse(e.data)));
-    state.streamTimers[job.id] = setTimeout(step, 300);
   }
 
-  function abortJob(jobId) {
+  async function abortJob(jobId) {
     const job = state.jobs.find((j) => j.id === jobId);
     if (!job || job.status !== "running") return;
-    clearTimeout(state.streamTimers[job.id]);
-    delete state.streamTimers[job.id];
-    job.status = "aborted";
-    job.finished_at = new Date().toISOString();
-    job.log.push("■ 已由使用者中止");
-    appendLogLine(job, "■ 已由使用者中止");
-    const it = state.installs.find((i) => i.id === job.installId);
-    if (it) it.status = "behind";
-    toast("warn", `已中止 ${job.software} 的更新`);
-    render();
-    if (state.activeJobId === job.id) renderCurrentJob(job);
-    renderRecentJobs();
+    // 先 disable abort 鈕，避免重複點擊
+    const btn = document.querySelector(`[data-abort="${jobId}"]`);
+    if (btn) btn.disabled = true;
+    try {
+      await api(`/api/jobs/${jobId}/abort`, { method: "POST" });
+    } catch (_) {
+      // 忽略錯誤；SSE done event 仍會收到並完成收尾
+    }
+    // 不在本地 finalize job；由 SSE done (data="aborted") 完成 UI 收尾
   }
 
-  function finishJob(job, script) {
-    delete state.streamTimers[job.id];
-    job.status = script.result || "success";
-    job.finished_at = new Date().toISOString();
+  function finishJob(job) {
+    // job.status is already set by SSE done event ("success" | "failed" | "aborted")
+    // INSTALLS / state.installs already refreshed by loadInstalls() before this call
     if (job.status === "success") {
+      const fresh = INSTALLS.find((i) => i.id === job.installId);
       const it = state.installs.find((i) => i.id === job.installId);
-      if (it) { it.current_version = job.new_version; it.status = "up_to_date"; it.behind_count = 0; }
-      if (window.CockpitStore) window.CockpitStore.applyUpdate(job.installId, { current_version: job.new_version, status: "up_to_date", behind_count: 0 });
-      toast("ok", `${job.software} 已更新到 ${job.new_version}`);
+      if (fresh && it) {
+        it.current_version = fresh.current_version;
+        it.status = fresh.status;
+        it.behind_count = fresh.behind_count ?? 0;
+      }
+      toast("ok", `${job.software} 更新成功`);
+    } else if (job.status === "aborted") {
+      const it = state.installs.find((i) => i.id === job.installId);
+      if (it) it.status = "behind";
+      toast("warn", `已中止 ${job.software} 的更新`);
     } else {
+      // "failed" or anything unexpected
       const it = state.installs.find((i) => i.id === job.installId);
       if (it) it.status = "behind";
       toast("err", `${job.software} 更新失敗`);
     }
-    render();
     if (state.activeJobId === job.id) renderCurrentJob(job);
     renderRecentJobs();
   }
@@ -619,17 +649,26 @@
     ls.classList.add("hidden"); ls.classList.remove("flex");
     render();
   }
-  $("#check-btn").addEventListener("click", () => {
+  $("#check-btn").addEventListener("click", async () => {
     const btn = $("#check-btn"), icon = $("#check-icon"), label = $("#check-label");
     btn.disabled = true; icon.classList.add("spin"); label.textContent = "檢查中…";
     showLoading();
-    // [API] POST /api/check → 完成後重抓 installs；此處 1.1s 後還原 mock
-    setTimeout(() => {
-      hideLoading();
-      btn.disabled = false; icon.classList.remove("spin"); label.textContent = "立即檢查";
-      $("#last-checked").textContent = "剛剛";
-      toast("ok", "已重新檢查所有來源");
-    }, 1150);
+    try {
+      await api("/api/check", { method: "POST" });
+    } catch (_) {
+      // 即使 check 失敗也繼續重新拉資料
+    }
+    // 等約 2s 讓後端非同步刷新後再拉新資料
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      await loadInstalls();
+      state.installs = structuredClone(INSTALLS);
+      populateMachineFilter();
+    } catch (_) {}
+    hideLoading();
+    btn.disabled = false; icon.classList.remove("spin"); label.textContent = "立即檢查";
+    $("#last-checked").textContent = "剛剛";
+    toast("ok", "已重新檢查所有來源");
   });
 
   /* ============================================================
