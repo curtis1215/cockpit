@@ -11,6 +11,7 @@ venv/
 *.sqlite3
 
 # Local config / secrets
+/inventory.yaml
 inventory.local.yaml
 .env
 *.local

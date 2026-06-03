@@ -12,6 +12,6 @@
 - 設計規格：[`docs/specs/`](docs/specs/)
 - 實作計畫：[`docs/plans/`](docs/plans/)
 
-目前進度：子系統 2（版本追蹤器）設計已核可，待產出實作計畫。
+目前進度：子系統 2（版本追蹤器）後端已實作完成（FastAPI + SQLite + APScheduler + SSE，TDD 全綠），部署見 `docs/deploy.md`；前端 prototype 交付 claude design（見 `docs/frontend-brief.md`）。
 
 > ⚠️ 本 repo 含 homelab 基礎設施細節（機器 IP、Tailscale、Cloudflare 設定），維持 **private**。

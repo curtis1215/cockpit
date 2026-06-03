@@ -1,0 +1,32 @@
+machines:
+  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }
+  ubuntu_llm: { host: 100.0.0.0, ssh_user: curtis }
+  macmini:    { host: 100.106.177.80, ssh_user: curtis }
+
+software:
+  - name: claude-code
+    kind: npm
+    latest_source: "npm:@anthropic-ai/claude-code"
+    changelog: "github:anthropics/claude-code"
+    installs:
+      - machine: mac
+        current_cmd: "claude --version"
+        update: { type: command, cmd: "npm i -g @anthropic-ai/claude-code@latest" }
+
+  - name: multica
+    kind: custom
+    latest_source: "github:OWNER/multica"
+    changelog: "github:OWNER/multica"
+    installs:
+      - machine: macmini
+        current_cmd: "docker inspect multica --format '{{ index .Config.Labels \"version\" }}'"
+        update:
+          type: agent
+          runner: codex_exec
+          cwd: "/srv/multica"
+          prompt: |
+            multica 上游有新版 {latest_version}（目前 {current_version}）。請：
+            1. 同步上游到最新
+            2. 重新 build 鏡像
+            3. 重新部署容器
+            完成後回報新版本號與部署結果。
