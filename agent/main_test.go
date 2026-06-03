@@ -30,7 +30,7 @@ func TestPollOnceHandlesCheck(t *testing.T) {
 
 	c := httpclient.New(srv.URL, "tok", 5*time.Second)
 	// pollOnce 應在收到 check 時跑 installs + report-versions
-	pollOnce(c, 5*time.Second)
+	pollOnce(c, 5*time.Second, 2*time.Second, 1)
 	if atomic.LoadInt32(&reported) != 1 {
 		t.Fatalf("expected one report, got %d", reported)
 	}

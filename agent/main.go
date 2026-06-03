@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"time"
 
@@ -41,9 +42,11 @@ func main() {
 
 	// main long-poll loop
 	execTimeout := time.Duration(cfg.ExecTimeoutSec) * time.Second
+	controlInterval := time.Duration(cfg.ControlIntervalSec) * time.Second
+	pollWait := cfg.PollTimeoutSec
 	backoff := time.Second
 	for {
-		if err := pollOnce(c, execTimeout); err != nil {
+		if err := pollOnce(c, execTimeout, controlInterval, pollWait); err != nil {
 			log.Printf("poll error: %v (backoff %v)", err, backoff)
 			time.Sleep(backoff)
 			backoff *= 2
@@ -59,12 +62,12 @@ func main() {
 // pollOnce does one long-poll; on job it runs it (bounded by execTimeout);
 // on check it reports versions. The long-poll wait (25s) is bounded by the
 // http client timeout configured in main (PollTimeoutSec + 10).
-func pollOnce(c *httpclient.Client, execTimeout time.Duration) error {
+func pollOnce(c *httpclient.Client, execTimeout, controlInterval time.Duration, pollWait int) error {
 	var resp struct {
 		Type string        `json:"type"`
 		Job  jobrunner.Job `json:"job"`
 	}
-	status, err := c.GetJSON("/api/agent/poll?wait=25", &resp)
+	status, err := c.GetJSON(fmt.Sprintf("/api/agent/poll?wait=%d", pollWait), &resp)
 	if err != nil {
 		return err
 	}
@@ -73,7 +76,7 @@ func pollOnce(c *httpclient.Client, execTimeout time.Duration) error {
 	}
 	switch resp.Type {
 	case "job":
-		jobrunner.RunJob(c, resp.Job, 2*time.Second, execTimeout)
+		jobrunner.RunJob(c, resp.Job, controlInterval, execTimeout)
 	case "check":
 		reportVersions(c, execTimeout)
 	}
