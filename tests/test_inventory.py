@@ -63,3 +63,21 @@ software:
     p.write_text(bad)
     with pytest.raises(InventoryError, match="prompt"):
         load_inventory(p)
+
+
+def test_missing_latest_source(tmp_path):
+    bad = """
+machines: { mac: { host: 1.2.3.4, ssh_user: curtis } }
+software:
+  - name: x
+    kind: custom
+    changelog: null
+    installs:
+      - machine: mac
+        current_cmd: "x --version"
+        update: { type: command, cmd: "echo hi" }
+"""
+    p = tmp_path / "inv.yaml"
+    p.write_text(bad)
+    with pytest.raises(InventoryError, match="latest_source"):
+        load_inventory(p)

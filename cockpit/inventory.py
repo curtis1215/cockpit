@@ -36,6 +36,8 @@ def load_inventory(path: str | Path) -> Inventory:
 
     machines: dict[str, Machine] = {}
     for name, m in (data.get("machines") or {}).items():
+        if not isinstance(m, dict):
+            raise InventoryError(f"machine {name}: 定義必須是 mapping")
         if "host" not in m or "ssh_user" not in m:
             raise InventoryError(f"machine {name}: 需要 host 與 ssh_user")
         machines[name] = Machine(name=name, host=m["host"],
@@ -46,6 +48,8 @@ def load_inventory(path: str | Path) -> Inventory:
         name = sw.get("name")
         if not name:
             raise InventoryError("software 條目缺少 name")
+        if not sw.get("latest_source"):
+            raise InventoryError(f"software {name}: 需要 latest_source")
         installs: list[Install] = []
         for i, inst in enumerate(sw.get("installs") or []):
             ctx = f"software {name} install[{i}]"
