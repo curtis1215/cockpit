@@ -110,6 +110,19 @@ def get_job(conn, job_id):
 
 
 @_synchronized
+def list_jobs(conn, limit=50):
+    return list(conn.execute(
+        "SELECT * FROM jobs ORDER BY id DESC LIMIT ?", (limit,)))
+
+
+@_synchronized
+def get_last_error(conn, software, machine):
+    return conn.execute(
+        "SELECT detail FROM events WHERE type='error' AND software=? AND machine=? "
+        "ORDER BY id DESC LIMIT 1", (software, machine)).fetchone()
+
+
+@_synchronized
 def add_event(conn, type, software, machine, detail):
     conn.execute(
         "INSERT INTO events (type, software, machine, detail) VALUES (?, ?, ?, ?)",

@@ -78,3 +78,19 @@ def test_concurrent_db_access_is_serialized(tmp_path):
     for t in threads:
         t.join()
     assert errors == []
+
+
+def test_list_jobs_orders_newest_first(tmp_path):
+    c = _conn(tmp_path)
+    j1 = db.create_job(c, "a", "m", "command")
+    j2 = db.create_job(c, "b", "m", "command")
+    rows = db.list_jobs(c, limit=10)
+    assert [r["id"] for r in rows] == [j2, j1]
+
+
+def test_get_last_error_returns_latest(tmp_path):
+    c = _conn(tmp_path)
+    db.add_event(c, "error", "cc", "mac", "first")
+    db.add_event(c, "error", "cc", "mac", "second")
+    assert db.get_last_error(c, "cc", "mac")["detail"] == "second"
+    assert db.get_last_error(c, "cc", "nope") is None

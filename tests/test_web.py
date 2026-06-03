@@ -54,3 +54,29 @@ def test_trigger_update_conflict_returns_409(tmp_path, monkeypatch):
     assert client.post("/api/installs/cc/mac/update").status_code == 200
     # first job stays 'queued' (spawn stubbed) → second is blocked
     assert client.post("/api/installs/cc/mac/update").status_code == 409
+
+
+def test_list_machines(tmp_path):
+    app, _ = _app(tmp_path)
+    r = TestClient(app).get("/api/machines")
+    assert r.status_code == 200
+    assert r.json() == ["mac"]
+
+
+def test_installs_enriched_fields(tmp_path):
+    app, _ = _app(tmp_path)
+    rows = TestClient(app).get("/api/installs").json()
+    row = rows[0]
+    assert row["id"] == "cc::mac"
+    assert row["kind"] == "npm"
+    assert row["update_kind"] == "command"
+    assert row["behind_count"] == 3      # 2.1.98 -> 2.1.101
+    assert "error" in row                # present (None here)
+
+
+def test_list_jobs_endpoint(tmp_path):
+    app, c = _app(tmp_path)
+    db.create_job(c, "cc", "mac", "command")
+    rows = TestClient(app).get("/api/jobs").json()
+    assert len(rows) == 1
+    assert rows[0]["software"] == "cc"

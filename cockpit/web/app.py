@@ -10,6 +10,7 @@ from sse_starlette.sse import EventSourceResponse
 from cockpit import db, jobs
 from cockpit.collector import run_collection
 from cockpit.models import Inventory
+from cockpit.version_parse import compare
 
 STATIC_DIR = Path(__file__).with_name("static")
 
@@ -28,15 +29,40 @@ def create_app(conn, inv: Inventory) -> FastAPI:
     @app.get("/api/installs")
     def list_installs():
         latest = _latest_map(conn)
+        kind_of = {sw.name: sw.kind for sw in inv.software}
+        update_kind_of = {(sw.name, ins.machine): ins.update.type
+                          for sw in inv.software for ins in sw.installs}
         out = []
         for row in db.list_installs(conn):
+            sw_name, m = row["software"], row["machine"]
+            lv = latest.get(sw_name)
+            status = row["status"]
+            _, behind_count = compare(row["current_version"], lv)
+            err = None
+            if status == "error":
+                e = db.get_last_error(conn, sw_name, m)
+                err = e["detail"] if e else None
             out.append({
-                "software": row["software"], "machine": row["machine"],
-                "current_version": row["current_version"], "status": row["status"],
+                "id": f"{sw_name}::{m}",
+                "software": sw_name, "machine": m,
+                "kind": kind_of.get(sw_name),
+                "current_version": row["current_version"],
+                "latest_version": lv,
+                "status": status,
+                "behind_count": behind_count,
+                "update_kind": update_kind_of.get((sw_name, m)),
+                "error": err,
                 "last_checked": row["last_checked"],
-                "latest_version": latest.get(row["software"]),
             })
         return out
+
+    @app.get("/api/machines")
+    def list_machines():
+        return list(inv.machines)
+
+    @app.get("/api/jobs")
+    def list_jobs(limit: int = 50):
+        return [dict(j) for j in db.list_jobs(conn, limit)]
 
     @app.get("/api/changelog/{software}/{version}")
     def changelog(software: str, version: str):
