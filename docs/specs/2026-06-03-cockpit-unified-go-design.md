@@ -25,7 +25,7 @@
 |---|---|---|
 | **P0 核心骨架** | Go 單 binary（`serve`/`agent`/`upgrade`）；config；內嵌前端服務（`//go:embed`）；SQLite（`modernc.org/sqlite` 純 Go）；agent enrollment（token）+ 傳輸骨架（Bearer 認證、long-poll、health）。 | `cockpit serve` 起得來、前端載入、`cockpit agent` 能 enroll 並 heartbeat、systems 表出現該機 |
 | **P1 版本追蹤（port 到 Go）** | port 版本來源（npm/github/pypi/brew/claude-plugin/custom）、`build_update`、jobs 佇列（claim/record/abort）、SSE log、inventory（含 agent_token）、changelog 翻譯（`claude -p`）；前端版本頁 + changelog modal 接通。 | 等價現有 Python 功能、改 Go；端到端更新流程可跑 |
-| **P2 原生監控 + 拓樸** | agent 用 gopsutil 收 CPU/Mem/Disk/Net/Load/Temp/uptime + GPU（nvidia-smi）+ 容器（docker/podman）→ 每 ~15s 回報；server 存 30 天降採樣 + metrics/services/topology API；前端拓樸頁 + 趨勢圖表頁 + 機器詳情頁接通。 | 各機指標即時 + 30 天圖表、拓樸圖、容器狀態 |
+| **P2 原生監控 + 拓樸** | agent 用 gopsutil 收 CPU/Mem/Disk/Net/Load/Temp/uptime + GPU（nvidia-smi）+ 容器（docker/podman）+ **VM 列舉（hypervisor CLI）**→ 每 ~15s 回報；server 存 30 天降採樣 + metrics/services/vms/topology API + **host↔VM 對帳**；前端拓樸頁（含 VM 層）+ 趨勢圖表頁 + 機器詳情頁接通。 | 各機指標即時 + 30 天圖表、拓樸圖、容器狀態、**實體機→VM 層級** |
 | **P3 enrollment + 管理** | 機器 CRUD + `enroll-token`（UI 加機器→token→agent 連上→pending→online）；軟體/install 管理 CRUD；manage 頁接通。 | UI 可加/刪/命名機器、發 token、增刪改軟體 |
 | **P4 打包/部署** | GoReleaser（mac/linux/win × arm64/amd64）；內嵌前端單 binary；`curl\|sh` 安裝器 + `cockpit upgrade` 自升級；service 安裝（launchd/systemd/Windows Service，用 `kardianos/service`）；deploy runbook。 | 一行安裝/升級、三平台服務常駐 |
 
@@ -67,7 +67,8 @@ cockpit version                                        # 版本
 
 | 表 | 重點欄位 | 用途 |
 |---|---|---|
-| `systems` | id, label, role, os, arch, status(online\|warn\|offline\|pending), agent_version, agent_status(ok\|stale\|behind\|pending), last_seen, enroll_token, agent_token, created | 機器（含 enrollment 狀態） |
+| `systems` | id, label, role, os, arch, **kind(physical\|vm)**, **host_id(NULL；VM 連回其實體機 system)**, status(online\|warn\|offline\|pending), agent_version, agent_status(ok\|stale\|behind\|pending), last_seen, enroll_token, agent_token, created | 機器（實體機或 VM；含 enrollment 狀態） |
+| `vms` | host_system_id, name, uuid, vmx_path, state(running\|stopped\|suspended), vcpu, ram_mb, guest_os, linked_system_id(NULL；對帳到有裝 agent 的 system), last_seen | host agent 列舉的 VM 清單（外部視角） |
 | `metrics` | system_id, ts, type(`1m\|10m\|15m\|60m`…), cpu, mem, disk, gpu, net_up, net_down, load, temp | 時序（降採樣，見 §9） |
 | `metrics_latest` | system_id, （同上欄位的最新值）, spark(json) | 現況快照 + sparkline |
 | `services` | id, system_id, name, kind, status, cpu, mem, port, software_ids(json), depends(json) | 拓樸服務層（容器/程序） |
@@ -88,6 +89,7 @@ cockpit version                                        # 版本
 | `POST` | `/api/agent/enroll` | 用一次性 `enroll_token` 換長期 `agent_token`，建立/啟用 `systems` 列（pending→online）。 |
 | `POST` | `/api/agent/report-metrics` | `{system, ts, cpu, mem, disk, gpu, net_up, net_down, load, temp, uptime, spark?}` → 寫 metrics_latest + metrics（~15s 一次）。 |
 | `POST` | `/api/agent/report-services` | `[{name, kind, status, cpu, mem, port, software_ids?, depends?}]` → 更新該機 services（容器/程序）。 |
+| `POST` | `/api/agent/report-vms` | host agent 列舉的 VM：`[{name, uuid, vmx_path, state, vcpu, ram_mb, guest_os}]` → 寫該 host 的 `vms`，並對帳到有裝 agent 的 system（見 §9.1）。 |
 
 > 指標與服務回報與「版本回報/job」共用同一 long-poll/report 通道與認證；agent 用各自的 interval。
 
@@ -109,7 +111,7 @@ server 以 `//go:embed cockpit_frontend/*` 服務這些頁，並提供其 API（
 
 人/operator 面（前端用）：
 - 版本：`GET /api/installs`（enriched：id、kind、update_kind、behind_count、error、status 即時 compare）、`GET /api/changelog/{sw}/{v}`、`GET /api/jobs?limit=`、`GET /api/jobs/{id}`、`POST /api/installs/{sw}/{m}/update`(202)、`POST /api/jobs/{id}/abort`、`GET /api/jobs/{id}/log/stream`(SSE)、`POST /api/check`、`GET /api/machines`。
-- 監控/拓樸：`GET /api/systems`（list + 現況指標）、`GET /api/systems/{id}`、`GET /api/systems/{id}/metrics?range=…`、`GET /api/services`。
+- 監控/拓樸：`GET /api/systems`（list + 現況指標）、`GET /api/systems/{id}`、`GET /api/systems/{id}/metrics?range=…`、`GET /api/services`、`GET /api/vms`（或 `GET /api/systems/{id}/vms`，含對帳後的 host↔VM 關係）。
 - 管理：`POST /api/systems`、`PATCH /api/systems/{id}`、`DELETE /api/systems/{id}`、`POST /api/systems/{id}/enroll-token`、`POST/PATCH/DELETE /api/installs`、`GET/PUT /api/inventory`。
 
 ## 9. 監控細節（gopsutil + 30 天降採樣）
@@ -119,9 +121,17 @@ server 以 `//go:embed cockpit_frontend/*` 服務這些頁，並提供其 API（
 - **現況**：`metrics_latest` 存最新值 + `spark`(近 24 點 CPU) 供拓樸頁卡片即時顯示。
 - status 判定：online（近 N 秒有回報）、warn（門檻：mem/gpu/temp 過高）、offline（last_seen 逾時）、pending（已 enroll 未回報）。
 
-## 10. 拓樸（機器→服務→軟體）
+### 9.1 VM 監控（混合：host 列舉 + VM 內 agent）
+
+- **Host 列舉**（實體機的 agent）：用**可插拔的 hypervisor enumerator** 列出該機 VM。**首發 VMware Fusion（macOS）**：`vmrun list`（running 的 .vmx 路徑）+ 掃 VM library（`~/Virtual Machines.localized/*/*.vmx`）取得停止中的 VM；vCPU/RAM 從 `.vmx`（`numvcpus`/`memsize`）、guest OS 從 `.vmx`（`guestOS`）。回報 `report-vms`。（介面預留 libvirt `virsh`、VirtualBox `VBoxManage` 之後加。）
+- **VM 內 agent**（混合的另一半）：VM 裡跑 `cockpit agent` → 以**獨立 system**（`kind=vm`）有完整指標。
+- **對帳**（§6 report-vms 進來時）：把 host 回報的每個 VM 嘗試對應到已 enroll 的 system（依 uuid／hostname／label）；對上則設該 system 的 `host_id`＝此實體機、`vms.linked_system_id`＝該 system。對不上＝**無 agent 的 VM**，只存外部視角狀態（running/stopped/配置），拓樸顯示為該 host 下的 VM 節點、無內部指標。
+- **限制**：VMware Fusion CLI 不易取得「運行中 VM 的即時 CPU/Mem（外部視角）」；外部視角以**狀態 + 配置**為主，**即時內部指標靠 VM 內 agent**（這正是混合的目的）。
+
+## 10. 拓樸（機器→服務→軟體，實體機含 VM 層）
 
 - 機器層 = `systems`；服務層 = `services`（agent 回報容器/程序，kind: docker/service/daemon/proxy/db/plugin/runtime/bundle；`bundle`=系統套件，掛該機的 install 軟體）；軟體層 = `installs`。
+- **VM 層**：實體機（`kind=physical`）下掛其 `vms`；無 agent 的 VM＝葉節點（外部狀態）；有 agent 的 VM＝同時是 `kind=vm` 的 system（`host_id` 連回實體機），點開可再展開它自己的 services/software（三層在 VM 內遞迴）。
 - `services.software_ids` 連到 installs；`services.depends` 畫服務↔服務次要連線。
 - 「系統套件」bundle：把該機非容器化的追蹤軟體（CLI/plugin）掛上，維持三層連通。
 
@@ -152,6 +162,7 @@ server 以 `//go:embed cockpit_frontend/*` 服務這些頁，並提供其 API（
 - **Windows 多為 agent-only**；exec 更新指令：Unix 走 `bash -lc`，Windows 走 `powershell -c`（或 cmd）——以平台分支 + inventory 可標 shell。
 - 行程群組 kill：Unix `setpgid`+SIGKILL（現有）；Windows 用 Job Object/`taskkill /T`。以 build tag 分檔。
 - 指標：gopsutil 跨三平台；GPU/docker 視該機有無對應工具，缺則回報 null/略過。
+- **VM 列舉器與平台綁定**：VMware Fusion enumerator 僅 macOS（`vmrun`）；libvirt/VBox 各自平台。以介面 + build tag/能力偵測選用；該機無 hypervisor 則略過 `report-vms`。
 - 純 Go SQLite + 純 Go binary → 三平台交叉編譯零 C 工具鏈。
 
 ## 15. 重用 / 退場
@@ -163,7 +174,7 @@ server 以 `//go:embed cockpit_frontend/*` 服務這些頁，並提供其 API（
 ## 16. 驗收標準（總體，逐階段細化）
 
 - 單一 `cockpit` binary，`serve`/`agent`/`upgrade` 三模式；三平台可交叉編譯與執行（Windows 至少 agent）。
-- agent 經 token 連上、回報版本 + 指標 + 服務；server 存 30 天降採樣、出 metrics/topology/version API。
+- agent 經 token 連上、回報版本 + 指標 + 服務 + **VM 列舉**；server 存 30 天降採樣、做 **host↔VM 對帳**、出 metrics/topology/vms/version API。
 - 前端（`cockpit_frontend`）內嵌服務、各頁接真 API：版本追蹤端到端（更新→SSE→完成）、拓樸圖、機器詳情 30 天圖表、管理（加機器 enroll、增刪軟體）。
 - 一行安裝 + `cockpit upgrade` 自升級；service 三平台常駐。
 - 指令唯一來源 inventory；agent 認證失敗被拒。
