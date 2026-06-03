@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from cockpit import db, jobs
-from cockpit.collector import run_collection
+from cockpit.collector import refresh_upstream
 from cockpit.models import Inventory
 from cockpit.version_parse import compare
 
@@ -75,7 +75,7 @@ def create_app(conn, inv: Inventory) -> FastAPI:
 
     @app.post("/api/check")
     def check():
-        threading.Thread(target=run_collection, args=(conn, inv), daemon=True).start()
+        threading.Thread(target=refresh_upstream, args=(conn, inv), daemon=True).start()
         return {"started": True}
 
     @app.post("/api/installs/{software}/{machine}/update")

@@ -4,7 +4,7 @@ import uvicorn
 from cockpit import db
 from cockpit.config import Settings
 from cockpit.inventory import load_inventory
-from cockpit.collector import run_collection
+from cockpit.collector import refresh_upstream
 from cockpit.scheduler import build_scheduler
 from cockpit.web.app import create_app
 
@@ -16,7 +16,7 @@ def build() -> "tuple":
     inv = load_inventory(settings.inventory_path)
     app = create_app(conn, inv)
 
-    sch = build_scheduler(lambda: run_collection(conn, inv), hours=settings.check_hours)
+    sch = build_scheduler(lambda: refresh_upstream(conn, inv), hours=settings.check_hours)
     sch.start()
     return app, settings
 
