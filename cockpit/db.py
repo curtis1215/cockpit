@@ -119,6 +119,20 @@ def add_event(conn, type, software, machine, detail):
 
 
 @_synchronized
+def create_job_unique(conn, software, machine, kind, runner=None):
+    existing = conn.execute(
+        "SELECT id FROM jobs WHERE software=? AND machine=? "
+        "AND status IN ('queued','running') LIMIT 1", (software, machine)).fetchone()
+    if existing:
+        return None
+    cur = conn.execute(
+        "INSERT INTO jobs (software, machine, kind, runner) VALUES (?, ?, ?, ?)",
+        (software, machine, kind, runner))
+    conn.commit()
+    return cur.lastrowid
+
+
+@_synchronized
 def latest_version_map(conn):
     rows = conn.execute(
         "SELECT software, version FROM versions ORDER BY rowid").fetchall()

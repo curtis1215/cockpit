@@ -44,3 +44,13 @@ def test_trigger_update_creates_job(tmp_path, monkeypatch):
     assert r.status_code == 200
     jid = r.json()["job_id"]
     assert db.get_job(c, jid)["software"] == "cc"
+
+
+def test_trigger_update_conflict_returns_409(tmp_path, monkeypatch):
+    app, c = _app(tmp_path)
+    import cockpit.web.app as webapp
+    monkeypatch.setattr(webapp, "_spawn_job", lambda conn, inv, jid: None)
+    client = TestClient(app)
+    assert client.post("/api/installs/cc/mac/update").status_code == 200
+    # first job stays 'queued' (spawn stubbed) → second is blocked
+    assert client.post("/api/installs/cc/mac/update").status_code == 409

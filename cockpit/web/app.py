@@ -58,6 +58,8 @@ def create_app(conn, inv: Inventory) -> FastAPI:
             jid = jobs.start_job(conn, inv, software, machine)
         except KeyError:
             raise HTTPException(404, "install not found")
+        except jobs.ActiveJobExists:
+            raise HTTPException(409, "update already in progress")
         _spawn_job(conn, inv, jid)
         return {"job_id": jid}
 

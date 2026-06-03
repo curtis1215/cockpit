@@ -7,6 +7,10 @@ from cockpit.runner import execute as _default_execute
 from cockpit.version_parse import parse_version
 
 
+class ActiveJobExists(Exception):
+    pass
+
+
 def _find(inv: Inventory, software: str, machine: str) -> tuple[Software, Install]:
     for sw in inv.software:
         if sw.name == software:
@@ -51,8 +55,11 @@ def build_update(inv: Inventory, sw: Software, inst: Install, *, latest_version,
 
 def start_job(conn, inv: Inventory, software: str, machine: str) -> int:
     sw, inst = _find(inv, software, machine)
-    return db.create_job(conn, software, machine, inst.update.type,
-                         runner=inst.update.runner)
+    jid = db.create_job_unique(conn, software, machine, inst.update.type,
+                               runner=inst.update.runner)
+    if jid is None:
+        raise ActiveJobExists(f"active job already exists for {software}@{machine}")
+    return jid
 
 
 def run_job(conn, inv: Inventory, job_id: int, *, execute=_default_execute) -> None:

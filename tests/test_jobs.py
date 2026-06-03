@@ -130,3 +130,11 @@ def test_run_job_verify_failure_still_finishes(tmp_path):
     job = db.get_job(c, jid)
     assert job["status"] == "success"     # update itself exited 0
     assert job["new_version"] is None     # verify failed → version unknown
+
+
+def test_start_job_blocks_when_active(tmp_path):
+    c = db.connect(tmp_path / "c.db"); db.init_db(c)
+    inv = _inv_command()
+    jobs.start_job(c, inv, "cc", "mac")
+    with pytest.raises(jobs.ActiveJobExists):
+        jobs.start_job(c, inv, "cc", "mac")

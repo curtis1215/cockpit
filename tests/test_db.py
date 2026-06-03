@@ -47,6 +47,15 @@ def test_events(tmp_path):
     assert row["type"] == "check"
 
 
+def test_create_job_unique_blocks_duplicate(tmp_path):
+    c = _conn(tmp_path)
+    j1 = db.create_job_unique(c, "cc", "mac", "command")
+    assert j1 is not None
+    assert db.create_job_unique(c, "cc", "mac", "command") is None
+    db.finish_job(c, j1, "success", 0)
+    assert db.create_job_unique(c, "cc", "mac", "command") is not None
+
+
 def test_concurrent_db_access_is_serialized(tmp_path):
     import threading
     c = _conn(tmp_path)
