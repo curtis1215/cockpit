@@ -1,15 +1,25 @@
 from __future__ import annotations
 import re
 
+# 抓 X.Y / X.Y.Z / X.Y.Z.W（下限兩段是刻意的）
 _SEMVER = re.compile(r"(\d+(?:\.\d+){1,3})")
 
 
 def parse_version(text: str, regex: str | None = None) -> str | None:
     if text is None:
         return None
-    pattern = re.compile(regex) if regex else _SEMVER
+    if regex:
+        try:
+            pattern = re.compile(regex)
+        except re.error:
+            return None
+    else:
+        pattern = _SEMVER
     m = pattern.search(text)
-    return m.group(1) if m else None
+    if not m:
+        return None
+    # 若自訂 regex 沒有 capture group，退回整段 match（避免 group(1) 崩潰）
+    return m.group(1 if m.lastindex else 0)
 
 
 def _key(v: str) -> list[int]:

@@ -18,6 +18,15 @@ def test_parse_none():
     assert parse_version("no version here") is None
 
 
+def test_parse_custom_regex_no_group():
+    # 自訂 regex 無 capture group → 回整段 match，不崩潰
+    assert parse_version("image: app:1.2.3", r"app:[0-9.]+") == "app:1.2.3"
+
+
+def test_parse_invalid_regex_returns_none():
+    assert parse_version("whatever 1.2.3", r"([0-9") is None
+
+
 def test_compare():
     assert compare("2.1.98", "2.1.101") == ("behind", 3)
     assert compare("2.1.101", "2.1.101") == ("up_to_date", 0)
