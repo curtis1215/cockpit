@@ -29,8 +29,11 @@ def _parse_update(raw: dict, ctx: str) -> Update:
     raise InventoryError(f"{ctx}: 未知 update.type={t!r}")
 
 
-def load_inventory(path: str | Path) -> Inventory:
-    data = yaml.safe_load(Path(path).read_text())
+def load_inventory_text(text: str) -> Inventory:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        raise InventoryError(f"YAML 解析失敗: {e}")
     if not isinstance(data, dict):
         raise InventoryError("inventory 根節點必須是 mapping")
 
@@ -40,8 +43,9 @@ def load_inventory(path: str | Path) -> Inventory:
             raise InventoryError(f"machine {name}: 定義必須是 mapping")
         if "host" not in m or "ssh_user" not in m:
             raise InventoryError(f"machine {name}: 需要 host 與 ssh_user")
-        machines[name] = Machine(name=name, host=m["host"],
-                                 ssh_user=m["ssh_user"], local=bool(m.get("local", False)))
+        machines[name] = Machine(name=name, host=m["host"], ssh_user=m["ssh_user"],
+                                 local=bool(m.get("local", False)),
+                                 agent_token=m.get("agent_token"))
 
     software: list[Software] = []
     for sw in (data.get("software") or []):
@@ -65,3 +69,16 @@ def load_inventory(path: str | Path) -> Inventory:
                                  latest_source=sw["latest_source"],
                                  changelog=sw.get("changelog"), installs=installs))
     return Inventory(machines=machines, software=software)
+
+
+def load_inventory(path: str | Path) -> Inventory:
+    return load_inventory_text(Path(path).read_text())
+
+
+def machine_for_token(inv: Inventory, token: str) -> str | None:
+    if not token:
+        return None
+    for name, m in inv.machines.items():
+        if m.agent_token and m.agent_token == token:
+            return name
+    return None

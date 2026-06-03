@@ -8,6 +8,7 @@ class Machine:
     host: str
     ssh_user: str
     local: bool = False
+    agent_token: str | None = None
 
 
 @dataclass
