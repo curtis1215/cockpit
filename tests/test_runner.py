@@ -17,6 +17,12 @@ def test_execute_local_nonzero_exit():
     assert res.exit_code == 3
 
 
+def test_execute_local_timeout_kills_process():
+    m = Machine(name="mac", host="x", ssh_user="curtis", local=True)
+    res = runner.execute(m, "sleep 5", timeout=1)
+    assert res.exit_code != 0   # SIGKILLed → non-zero (negative) return code
+
+
 def test_remote_dispatches_to_ssh(monkeypatch):
     m = Machine(name="box", host="5.6.7.8", ssh_user="root", local=False)
     called = {}

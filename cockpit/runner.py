@@ -1,6 +1,8 @@
 from __future__ import annotations
 import shlex
+import signal
 import subprocess
+import threading
 from dataclasses import dataclass
 
 from cockpit.models import Machine
@@ -30,15 +32,27 @@ def _run_local(shell_cmd, cwd, on_line, timeout) -> ExecResult:
         ["bash", "-lc", _wrap_cwd(shell_cmd, cwd)],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
     )
+    timer = threading.Timer(timeout, lambda: _kill(proc))
     captured: list[str] = []
-    assert proc.stdout is not None
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        captured.append(line)
-        if on_line:
-            on_line(line)
-    proc.wait(timeout=timeout)
+    try:
+        timer.start()
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.rstrip("\r\n")
+            captured.append(line)
+            if on_line:
+                on_line(line)
+        proc.wait()
+    finally:
+        timer.cancel()
     return ExecResult(exit_code=proc.returncode, output="\n".join(captured) + ("\n" if captured else ""))
+
+
+def _kill(proc):
+    try:
+        proc.send_signal(signal.SIGKILL)
+    except Exception:
+        pass
 
 
 def _run_ssh(machine: Machine, shell_cmd, cwd, on_line, timeout) -> ExecResult:
@@ -46,12 +60,12 @@ def _run_ssh(machine: Machine, shell_cmd, cwd, on_line, timeout) -> ExecResult:
 
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(machine.host, username=machine.ssh_user, timeout=20)
     captured: list[str] = []
     try:
+        client.connect(machine.host, username=machine.ssh_user, timeout=20)
         _, stdout, _ = client.exec_command(_wrap_cwd(shell_cmd, cwd), timeout=timeout, get_pty=True)
         for raw in iter(stdout.readline, ""):
-            line = raw.rstrip("\n")
+            line = raw.rstrip("\r\n")
             captured.append(line)
             if on_line:
                 on_line(line)
