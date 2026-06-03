@@ -31,3 +31,21 @@ def test_translate_failure_returns_none(monkeypatch):
 
     monkeypatch.setattr(translate.subprocess, "run", boom)
     assert translate.translate_changelog("notes") is None
+
+
+def test_translate_handles_braces_in_raw(monkeypatch):
+    seen = {}
+
+    class FakeCompleted:
+        returncode = 0
+        stdout = "摘要"
+
+    def fake_run(cmd, **kw):
+        seen["cmd"] = cmd
+        return FakeCompleted()
+
+    monkeypatch.setattr(translate.subprocess, "run", fake_run)
+    out = translate.translate_changelog("- support {foo} and {{bar}}")
+    assert out == "摘要"
+    # prompt must preserve the literal braces (no .format crash, no swallowed None)
+    assert "{foo}" in seen["cmd"][2]

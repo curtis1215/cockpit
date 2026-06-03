@@ -11,7 +11,7 @@ _PROMPT = (
 def translate_changelog(raw: str | None, timeout: int = 120) -> str | None:
     if not raw or not raw.strip():
         return None
-    prompt = _PROMPT.format(raw=raw)
+    prompt = _PROMPT.replace("{raw}", raw)
     try:
         res = subprocess.run(["claude", "-p", prompt], capture_output=True,
                              text=True, timeout=timeout)
