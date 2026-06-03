@@ -56,6 +56,7 @@ func (s *Server) routes() {
 		writeJSON(w, 200, list)
 	})
 	s.registerAgentAPI()
+	s.registerAgentVT()
 	s.registerVersionAPI()
 	s.registerSSE()
 	sub, _ := fs.Sub(rootpkg.Frontend, "cockpit_frontend")
