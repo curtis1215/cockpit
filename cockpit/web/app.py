@@ -82,7 +82,7 @@ def create_app(conn, inv: Inventory) -> FastAPI:
                 log = job["log"] or ""
                 lines = log.split("\n")
                 # 已完成的行（最後一段可能是未換行的殘段，這裡 log 都以 \n 結尾）
-                ready = lines[:-1] if log.endswith("\n") else lines
+                ready = lines[:-1] if log.endswith("\n") else (lines if log else [])
                 for line in ready[sent:]:
                     yield {"event": "log", "data": line}
                 sent = len(ready)

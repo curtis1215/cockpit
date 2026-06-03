@@ -26,3 +26,29 @@ def test_sse_streams_existing_log_then_done(tmp_path):
     assert "line A" in body
     assert "line B" in body
     assert "event: done" in body
+
+
+def test_sse_emits_first_line_when_log_starts_empty(tmp_path, monkeypatch):
+    from cockpit import db as dbmod
+    app, jid = _app(tmp_path)
+
+    states = [
+        {"log": "", "status": "running"},
+        {"log": "line A\n", "status": "running"},
+        {"log": "line A\nline B\n", "status": "success"},
+    ]
+    calls = {"i": 0}
+
+    def fake_get_job(conn, job_id):
+        i = min(calls["i"], len(states) - 1)
+        calls["i"] += 1
+        s = states[i]
+        return {"id": job_id, "software": "cc", "machine": "mac",
+                "log": s["log"], "status": s["status"]}
+
+    monkeypatch.setattr(dbmod, "get_job", fake_get_job)
+    with TestClient(app) as client:
+        body = client.get(f"/api/jobs/{jid}/log/stream").text
+    assert "line A" in body
+    assert "line B" in body
+    assert "event: done" in body
