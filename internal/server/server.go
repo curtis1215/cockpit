@@ -51,4 +51,3 @@ func (s *Server) routes() {
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
 }
 
-func (s *Server) registerAgentAPI() {} // 由 Task 4 取代
