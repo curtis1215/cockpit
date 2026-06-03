@@ -125,6 +125,9 @@ def create_app(conn, inv: Inventory) -> FastAPI:
                 await asyncio.sleep(0.5)
         return EventSourceResponse(gen())
 
+    from cockpit.web.agent import build_agent_router
+    app.include_router(build_agent_router(conn, inv))
+
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
