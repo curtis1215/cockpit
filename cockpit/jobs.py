@@ -3,8 +3,6 @@ import shlex
 
 from cockpit import db
 from cockpit.models import Inventory, Software, Install, Machine
-from cockpit.runner import execute as _default_execute
-from cockpit.version_parse import parse_version
 
 
 class ActiveJobExists(Exception):
@@ -35,7 +33,6 @@ def build_update(inv: Inventory, sw: Software, inst: Install, *, latest_version,
     if upd.type == "command":
         return upd.cmd, machine
 
-    # agent 型：先渲染 prompt 變數
     prompt = _render(upd.prompt, name=sw.name, machine=target_name,
                      current_version=current_version, latest_version=latest_version,
                      changelog_zh=changelog_zh, cwd=upd.cwd)
@@ -62,49 +59,54 @@ def start_job(conn, inv: Inventory, software: str, machine: str) -> int:
     return jid
 
 
-def run_job(conn, inv: Inventory, job_id: int, *, execute=_default_execute) -> None:
-    job = db.get_job(conn, job_id)
-    sw, inst = _find(inv, job["software"], job["machine"])
-    db.set_job_running(conn, job_id)
-
-    latest_row = db.get_latest_version(conn, sw.name)
-    latest_version = latest_row["version"] if latest_row else None
-    changelog_zh = latest_row["changelog_zh"] if latest_row else None
-    cur_row = db.get_install(conn, sw.name, inst.machine)
-    current_version = cur_row["current_version"] if cur_row else None
-
-    try:
-        cmd, machine = build_update(inv, sw, inst, latest_version=latest_version,
-                                    current_version=current_version, changelog_zh=changelog_zh)
-    except (ValueError, KeyError) as e:
-        db.append_job_log(conn, job_id, f"[build error] {e}")
-        db.finish_job(conn, job_id, "failed", -1)
-        db.add_event(conn, "update", sw.name, inst.machine, f"job {job_id} build error: {e}")
-        return
+def claim_next_job(conn, inv: Inventory, machine: str) -> dict | None:
+    """原子取該機最舊 queued job（標 running）、渲染指令、寫入 dispatch 欄位，回 dict。"""
+    row = db.claim_oldest_queued(conn, machine)   # 原子 queued→running
+    if row is None:
+        return None
+    job_id = row["id"]
+    sw, inst = _find(inv, row["software"], row["machine"])
+    latest = db.get_latest_version(conn, sw.name)
+    latest_version = latest["version"] if latest else None
+    changelog_zh = latest["changelog_zh"] if latest else None
+    cur = db.get_install(conn, sw.name, inst.machine)
+    current_version = cur["current_version"] if cur else None
+    cmd, _machine = build_update(inv, sw, inst, latest_version=latest_version,
+                                 current_version=current_version, changelog_zh=changelog_zh)
     cwd = inst.update.cwd if inst.update.type == "agent" else None
+    db.set_job_dispatch(conn, job_id, cmd=cmd, cwd=cwd,
+                        current_cmd=inst.current_cmd, version_regex=inst.version_regex)
+    return {
+        "id": job_id, "software": sw.name, "machine": inst.machine,
+        "shell_cmd": cmd, "cwd": cwd,
+        "current_cmd": inst.current_cmd, "version_regex": inst.version_regex,
+    }
 
-    try:
-        res = execute(machine, cmd, cwd=cwd, on_line=lambda ln: db.append_job_log(conn, job_id, ln))
-    except Exception as e:
-        db.append_job_log(conn, job_id, f"[error] {e}")
-        db.finish_job(conn, job_id, "failed", -1)
-        db.add_event(conn, "update", sw.name, inst.machine, f"job {job_id} crashed: {e}")
+
+def record_result(conn, inv: Inventory, job_id: int, status: str,
+                  exit_code: int, new_version: str | None) -> None:
+    job = db.get_job(conn, job_id)
+    if job is None:
         return
+    if status == "success" and new_version:
+        db.upsert_install(conn, job["software"], job["machine"], new_version,
+                          "up_to_date", _now())
+    db.finish_job(conn, job_id, status, exit_code, new_version=new_version)
+    db.add_event(conn, "update", job["software"], job["machine"],
+                 f"job {job_id} {status} exit={exit_code} new={new_version}")
 
-    new_version = None
-    if res.exit_code == 0:
-        try:
-            verify = execute(machine, inst.current_cmd,
-                             on_line=lambda ln: db.append_job_log(conn, job_id, ln))
-            new_version = parse_version(verify.output, inst.version_regex)
-            install_status = "up_to_date" if new_version else "unknown"
-            db.upsert_install(conn, sw.name, inst.machine, new_version, install_status, _now())
-        except Exception as e:
-            db.append_job_log(conn, job_id, f"[verify error] {e}")
-    status = "success" if res.exit_code == 0 else "failed"
-    db.finish_job(conn, job_id, status, res.exit_code, new_version=new_version)
-    db.add_event(conn, "update", sw.name, inst.machine,
-                 f"job {job_id} {status} exit={res.exit_code} new={new_version}")
+
+def request_abort(conn, job_id: int) -> dict | None:
+    job = db.get_job(conn, job_id)
+    if job is None:
+        return None
+    if job["status"] == "queued":
+        db.finish_job(conn, job_id, "aborted", -1)
+        db.add_event(conn, "update", job["software"], job["machine"], f"job {job_id} aborted (queued)")
+        return dict(db.get_job(conn, job_id))
+    if job["status"] == "running":
+        db.request_abort(conn, job_id)
+    return dict(db.get_job(conn, job_id))
 
 
 def _now() -> str:

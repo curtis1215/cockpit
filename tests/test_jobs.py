@@ -2,7 +2,6 @@ import pytest
 
 from cockpit import db, jobs
 from cockpit.models import Machine, Update, Install, Software, Inventory
-from cockpit.runner import ExecResult
 
 
 def _inv_command():
@@ -42,29 +41,6 @@ def test_build_agent_codex_exec_renders_prompt():
     assert machine.name == "macmini"
 
 
-def test_run_update_job_success(tmp_path, monkeypatch):
-    c = db.connect(tmp_path / "c.db"); db.init_db(c)
-    inv = _inv_command()
-
-    calls = []
-
-    def fake_execute(machine, shell_cmd, cwd=None, on_line=None, timeout=900):
-        calls.append(shell_cmd)
-        if shell_cmd == "cc --version":          # 收尾重讀版本
-            if on_line: on_line("cc 2.1.101")
-            return ExecResult(0, "cc 2.1.101\n")
-        if on_line: on_line("added 1 package")    # 更新本身
-        return ExecResult(0, "added 1 package\n")
-
-    jid = jobs.start_job(c, inv, "cc", "mac")
-    jobs.run_job(c, inv, jid, execute=fake_execute)
-
-    job = db.get_job(c, jid)
-    assert job["status"] == "success"
-    assert job["new_version"] == "2.1.101"
-    assert "added 1 package" in job["log"]
-
-
 def test_build_agent_claude_p_renders_prompt():
     m = Machine(name="m", host="x", ssh_user="c", local=True)
     sw = Software(name="s", kind="custom", latest_source="github:o/s", changelog=None,
@@ -101,35 +77,6 @@ def test_build_unknown_runner_raises():
     with pytest.raises(ValueError):
         jobs.build_update(inv, sw, sw.installs[0], latest_version="1",
                           current_version=None, changelog_zh=None)
-
-
-def test_run_job_build_error_not_stuck(tmp_path):
-    c = db.connect(tmp_path / "c.db"); db.init_db(c)
-    m = Machine(name="m", host="x", ssh_user="c", local=True)
-    sw = Software(name="s", kind="custom", latest_source="github:o/s", changelog=None,
-                  installs=[Install(machine="m", current_cmd="s --version",
-                                    update=Update(type="agent", runner="bogus", prompt="x"))])
-    inv = Inventory(machines={"m": m}, software=[sw])
-    jid = jobs.start_job(c, inv, "s", "m")
-    jobs.run_job(c, inv, jid)   # build_update raises internally → must finish failed, not stuck
-    assert db.get_job(c, jid)["status"] == "failed"
-
-
-def test_run_job_verify_failure_still_finishes(tmp_path):
-    c = db.connect(tmp_path / "c.db"); db.init_db(c)
-    inv = _inv_command()
-
-    def fake_execute(machine, shell_cmd, cwd=None, on_line=None, timeout=900):
-        if shell_cmd == "cc --version":
-            raise RuntimeError("ssh down")
-        if on_line: on_line("added 1 package")
-        return ExecResult(0, "added 1 package\n")
-
-    jid = jobs.start_job(c, inv, "cc", "mac")
-    jobs.run_job(c, inv, jid, execute=fake_execute)
-    job = db.get_job(c, jid)
-    assert job["status"] == "success"     # update itself exited 0
-    assert job["new_version"] is None     # verify failed → version unknown
 
 
 def test_start_job_blocks_when_active(tmp_path):

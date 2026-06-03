@@ -96,6 +96,13 @@ def create_app(conn, inv: Inventory) -> FastAPI:
             raise HTTPException(404, "job not found")
         return dict(job)
 
+    @app.post("/api/jobs/{job_id}/abort")
+    def abort_update(job_id: int):
+        job = jobs.request_abort(conn, job_id)
+        if job is None:
+            raise HTTPException(404, "job not found")
+        return dict(job)
+
     @app.get("/api/jobs/{job_id}/log/stream")
     async def stream_log(job_id: int):
         async def gen():
@@ -112,7 +119,7 @@ def create_app(conn, inv: Inventory) -> FastAPI:
                 for line in ready[sent:]:
                     yield {"event": "log", "data": line}
                 sent = len(ready)
-                if job["status"] in ("success", "failed"):
+                if job["status"] in ("success", "failed", "aborted"):
                     yield {"event": "done", "data": job["status"]}
                     return
                 await asyncio.sleep(0.5)
