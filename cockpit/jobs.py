@@ -70,8 +70,14 @@ def run_job(conn, inv: Inventory, job_id: int, *, execute=_default_execute) -> N
         (sw.name, inst.machine)).fetchone()
     current_version = cur_row["current_version"] if cur_row else None
 
-    cmd, machine = build_update(inv, sw, inst, latest_version=latest_version,
-                                current_version=current_version, changelog_zh=changelog_zh)
+    try:
+        cmd, machine = build_update(inv, sw, inst, latest_version=latest_version,
+                                    current_version=current_version, changelog_zh=changelog_zh)
+    except (ValueError, KeyError) as e:
+        db.append_job_log(conn, job_id, f"[build error] {e}")
+        db.finish_job(conn, job_id, "failed", -1)
+        db.add_event(conn, "update", sw.name, inst.machine, f"job {job_id} build error: {e}")
+        return
     cwd = inst.update.cwd if inst.update.type == "agent" else None
 
     try:
@@ -84,11 +90,14 @@ def run_job(conn, inv: Inventory, job_id: int, *, execute=_default_execute) -> N
 
     new_version = None
     if res.exit_code == 0:
-        verify = execute(machine, inst.current_cmd,
-                         on_line=lambda ln: db.append_job_log(conn, job_id, ln))
-        new_version = parse_version(verify.output, inst.version_regex)
-        db.upsert_install(conn, sw.name, inst.machine, new_version, "up_to_date",
-                          _now())
+        try:
+            verify = execute(machine, inst.current_cmd,
+                             on_line=lambda ln: db.append_job_log(conn, job_id, ln))
+            new_version = parse_version(verify.output, inst.version_regex)
+            install_status = "up_to_date" if new_version else "unknown"
+            db.upsert_install(conn, sw.name, inst.machine, new_version, install_status, _now())
+        except Exception as e:
+            db.append_job_log(conn, job_id, f"[verify error] {e}")
     status = "success" if res.exit_code == 0 else "failed"
     db.finish_job(conn, job_id, status, res.exit_code, new_version=new_version)
     db.add_event(conn, "update", sw.name, inst.machine,
