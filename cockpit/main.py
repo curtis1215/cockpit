@@ -14,7 +14,7 @@ def build() -> "tuple":
     conn = db.connect(settings.db_path)
     db.init_db(conn)
     inv = load_inventory(settings.inventory_path)
-    app = create_app(conn, inv)
+    app = create_app(conn, inv, inventory_path=settings.inventory_path)
 
     sch = build_scheduler(lambda: refresh_upstream(conn, inv), hours=settings.check_hours)
     sch.start()

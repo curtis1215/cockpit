@@ -3,12 +3,14 @@ import asyncio
 import threading
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from sse_starlette.sse import EventSourceResponse
 
 from cockpit import db, jobs
 from cockpit.collector import refresh_upstream
+from cockpit.inventory import load_inventory_text, InventoryError
 from cockpit.models import Inventory
 from cockpit.version_parse import compare
 
@@ -20,7 +22,7 @@ def _latest_map(conn) -> dict[str, str]:
 
 
 
-def create_app(conn, inv: Inventory) -> FastAPI:
+def create_app(conn, inv: Inventory, inventory_path: str | None = None) -> FastAPI:
     app = FastAPI(title="cockpit")
 
     @app.get("/api/installs")
@@ -122,6 +124,27 @@ def create_app(conn, inv: Inventory) -> FastAPI:
                     return
                 await asyncio.sleep(0.5)
         return EventSourceResponse(gen())
+
+    @app.get("/api/inventory")
+    def get_inventory():
+        if inventory_path and Path(inventory_path).exists():
+            return PlainTextResponse(Path(inventory_path).read_text())
+        raise HTTPException(404, "inventory file not available")
+
+    @app.put("/api/inventory")
+    async def put_inventory(request: Request):
+        text = (await request.body()).decode("utf-8")
+        try:
+            new = load_inventory_text(text)
+        except InventoryError as e:
+            raise HTTPException(400, f"invalid inventory: {e}")
+        if not inventory_path:
+            raise HTTPException(409, "inventory_path not configured")
+        Path(inventory_path).write_text(text)
+        inv.machines = new.machines      # hot-reload in place (closures share this object)
+        inv.software = new.software
+        return {"ok": True, "machines": list(inv.machines),
+                "software": [s.name for s in inv.software]}
 
     from cockpit.web.agent import build_agent_router
     app.include_router(build_agent_router(conn, inv))
