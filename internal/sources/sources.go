@@ -117,14 +117,3 @@ func githubReleaseBody(repo, version string, hc *http.Client, base string) strin
 	}
 	return ""
 }
-
-// ---- TEMPORARY stubs: replaced by Task 5 (more.go) ----
-func fetchPypi(sw inventory.Software, l string, hc *http.Client, base string) (SourceResult, error) {
-	return SourceResult{}, fmt.Errorf("pypi not yet")
-}
-func fetchBrew(sw inventory.Software, l string, hc *http.Client, base string) (SourceResult, error) {
-	return SourceResult{}, fmt.Errorf("brew not yet")
-}
-func fetchCustom(sw inventory.Software, l string) (SourceResult, error) {
-	return SourceResult{}, fmt.Errorf("custom not yet")
-}
