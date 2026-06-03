@@ -45,3 +45,27 @@ def test_events(tmp_path):
     cur = c.execute("SELECT type, detail FROM events")
     row = cur.fetchone()
     assert row["type"] == "check"
+
+
+def test_concurrent_db_access_is_serialized(tmp_path):
+    import threading
+    c = _conn(tmp_path)
+    errors = []
+
+    def worker(n):
+        try:
+            for i in range(50):
+                db.upsert_install(c, f"sw{n}", "m", str(i), "behind", "t")
+                db.list_installs(c)
+                jid = db.create_job(c, f"sw{n}", "m", "command")
+                db.append_job_log(c, jid, "x")
+                db.get_job(c, jid)
+        except Exception as e:  # pragma: no cover
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(n,)) for n in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []

@@ -15,9 +15,7 @@ STATIC_DIR = Path(__file__).with_name("static")
 
 
 def _latest_map(conn) -> dict[str, str]:
-    rows = conn.execute(
-        "SELECT software, version FROM versions ORDER BY rowid").fetchall()
-    return {r["software"]: r["version"] for r in rows}  # 後者覆蓋前者＝最新
+    return db.latest_version_map(conn)
 
 
 def _spawn_job(conn, inv, job_id):

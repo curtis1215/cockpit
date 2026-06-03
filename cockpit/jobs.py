@@ -60,14 +60,10 @@ def run_job(conn, inv: Inventory, job_id: int, *, execute=_default_execute) -> N
     sw, inst = _find(inv, job["software"], job["machine"])
     db.set_job_running(conn, job_id)
 
-    latest_row = conn.execute(
-        "SELECT version, changelog_zh FROM versions WHERE software=? ORDER BY rowid DESC LIMIT 1",
-        (sw.name,)).fetchone()
+    latest_row = db.get_latest_version(conn, sw.name)
     latest_version = latest_row["version"] if latest_row else None
     changelog_zh = latest_row["changelog_zh"] if latest_row else None
-    cur_row = conn.execute(
-        "SELECT current_version FROM installs WHERE software=? AND machine=?",
-        (sw.name, inst.machine)).fetchone()
+    cur_row = db.get_install(conn, sw.name, inst.machine)
     current_version = cur_row["current_version"] if cur_row else None
 
     try:

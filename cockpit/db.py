@@ -1,8 +1,20 @@
 from __future__ import annotations
 import sqlite3
+import threading
+import functools
 from pathlib import Path
 
 _SCHEMA = Path(__file__).with_name("schema.sql")
+
+_LOCK = threading.RLock()
+
+
+def _synchronized(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -12,11 +24,13 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+@_synchronized
 def init_db(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA.read_text())
     conn.commit()
 
 
+@_synchronized
 def upsert_install(conn, software, machine, current_version, status, last_checked):
     conn.execute(
         """INSERT INTO installs (software, machine, current_version, status, last_checked)
@@ -30,10 +44,12 @@ def upsert_install(conn, software, machine, current_version, status, last_checke
     conn.commit()
 
 
+@_synchronized
 def list_installs(conn):
     return list(conn.execute("SELECT * FROM installs ORDER BY software, machine"))
 
 
+@_synchronized
 def add_version(conn, software, version, released_at, changelog_raw, changelog_zh):
     conn.execute(
         """INSERT INTO versions (software, version, released_at, changelog_raw, changelog_zh)
@@ -47,12 +63,14 @@ def add_version(conn, software, version, released_at, changelog_raw, changelog_z
     conn.commit()
 
 
+@_synchronized
 def get_version(conn, software, version):
     return conn.execute(
         "SELECT * FROM versions WHERE software=? AND version=?", (software, version)
     ).fetchone()
 
 
+@_synchronized
 def create_job(conn, software, machine, kind, runner=None) -> int:
     cur = conn.execute(
         "INSERT INTO jobs (software, machine, kind, runner) VALUES (?, ?, ?, ?)",
@@ -62,6 +80,7 @@ def create_job(conn, software, machine, kind, runner=None) -> int:
     return cur.lastrowid
 
 
+@_synchronized
 def set_job_running(conn, job_id):
     conn.execute(
         "UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=?", (job_id,)
@@ -69,11 +88,13 @@ def set_job_running(conn, job_id):
     conn.commit()
 
 
+@_synchronized
 def append_job_log(conn, job_id, line):
     conn.execute("UPDATE jobs SET log = log || ? || char(10) WHERE id=?", (line, job_id))
     conn.commit()
 
 
+@_synchronized
 def finish_job(conn, job_id, status, exit_code, new_version=None):
     conn.execute(
         """UPDATE jobs SET status=?, exit_code=?, new_version=?, finished_at=datetime('now')
@@ -83,13 +104,36 @@ def finish_job(conn, job_id, status, exit_code, new_version=None):
     conn.commit()
 
 
+@_synchronized
 def get_job(conn, job_id):
     return conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
 
 
+@_synchronized
 def add_event(conn, type, software, machine, detail):
     conn.execute(
         "INSERT INTO events (type, software, machine, detail) VALUES (?, ?, ?, ?)",
         (type, software, machine, detail),
     )
     conn.commit()
+
+
+@_synchronized
+def latest_version_map(conn):
+    rows = conn.execute(
+        "SELECT software, version FROM versions ORDER BY rowid").fetchall()
+    return {r["software"]: r["version"] for r in rows}  # 後者覆蓋前者＝最新
+
+
+@_synchronized
+def get_latest_version(conn, software):
+    return conn.execute(
+        "SELECT version, changelog_zh FROM versions WHERE software=? "
+        "ORDER BY rowid DESC LIMIT 1", (software,)).fetchone()
+
+
+@_synchronized
+def get_install(conn, software, machine):
+    return conn.execute(
+        "SELECT * FROM installs WHERE software=? AND machine=?",
+        (software, machine)).fetchone()
