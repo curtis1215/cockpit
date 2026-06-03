@@ -6,20 +6,30 @@ import (
 	"net/http"
 
 	rootpkg "github.com/curtis1215/cockpit"
+	"github.com/curtis1215/cockpit/internal/inventory"
 	"github.com/curtis1215/cockpit/internal/store"
 )
 
 type Server struct {
 	st           *store.Store
 	enrollSecret string
+	inv          inventory.Inventory
+	onCheck      func()
 	mux          *http.ServeMux
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
-	s := &Server{st: st, enrollSecret: enrollSecret, mux: http.NewServeMux()}
+	return NewWithInventory(st, enrollSecret, inventory.Inventory{})
+}
+
+func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Inventory) *Server {
+	s := &Server{st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux()}
 	s.routes()
 	return s
 }
+
+// OnCheck 注入「重新整理上游版本」回呼（serve 端提供，避免 server 依賴 collector）。
+func (s *Server) OnCheck(f func()) { s.onCheck = f }
 
 func (s *Server) Handler() http.Handler { return s.mux }
 
@@ -45,9 +55,9 @@ func (s *Server) routes() {
 		}
 		writeJSON(w, 200, list)
 	})
-	s.registerAgentAPI() // Task 4 fills this
-
+	s.registerAgentAPI()
+	s.registerVersionAPI()
+	s.registerSSE()
 	sub, _ := fs.Sub(rootpkg.Frontend, "cockpit_frontend")
 	s.mux.Handle("/", http.FileServer(http.FS(sub)))
 }
-
