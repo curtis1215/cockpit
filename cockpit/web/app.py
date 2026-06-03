@@ -35,8 +35,8 @@ def create_app(conn, inv: Inventory, inventory_path: str | None = None) -> FastA
         for row in db.list_installs(conn):
             sw_name, m = row["software"], row["machine"]
             lv = latest.get(sw_name)
-            status = row["status"]
-            _, behind_count = compare(row["current_version"], lv)
+            live_status, behind_count = compare(row["current_version"], lv)
+            status = "error" if row["status"] == "error" else live_status
             err = None
             if status == "error":
                 e = db.get_last_error(conn, sw_name, m)

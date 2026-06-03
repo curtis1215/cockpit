@@ -86,3 +86,21 @@ def test_abort_endpoint(tmp_path):
     assert r.status_code == 200
     assert r.json()["status"] == "aborted"
     assert client.post("/api/jobs/9999/abort").status_code == 404
+
+
+def test_installs_status_recomputed_when_upstream_advances(tmp_path):
+    # install was last reported up_to_date at version 2.1.101; then a newer upstream 3.0.1 arrives.
+    app, c = _app(tmp_path)
+    db.upsert_install(c, "cc", "mac", "2.1.101", "up_to_date", "t")
+    db.add_version(c, "cc", "3.0.1", None, "raw", None)        # newer upstream appears
+    row = [r for r in TestClient(app).get("/api/installs").json() if r["software"] == "cc"][0]
+    assert row["latest_version"] == "3.0.1"
+    assert row["behind_count"] >= 1
+    assert row["status"] == "behind"          # NOT "up_to_date" — must agree with behind_count
+
+
+def test_installs_error_status_preserved(tmp_path):
+    app, c = _app(tmp_path)
+    db.upsert_install(c, "cc", "mac", None, "error", "t")
+    row = [r for r in TestClient(app).get("/api/installs").json() if r["software"] == "cc"][0]
+    assert row["status"] == "error"           # agent execution error preserved
