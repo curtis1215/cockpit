@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cockpit · 管理</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    --bg:#f5f6f8; --bg-grid:#eceef1; --surface:#ffffff; --surface-2:#f0f2f4; --surface-3:#e7eaee;
+    --border:#e2e6ea; --border-2:#d3d9df; --text:#161a1f; --text-2:#5b636e; --text-3:#8b93a0;
+    --accent:#2f63ff; --accent-ink:#ffffff; --accent-weak:#eaf0ff; --term-bg:#0c0f14; --term-text:#d6dbe2;
+    --ok:#1f9d5b; --ok-bg:#e4f5ec; --ok-bd:#b9e6cd; --warn:#b5680a; --warn-bg:#fbeede; --warn-bd:#f1d5ab;
+    --err:#cf3030; --err-bg:#fbe6e6; --err-bd:#f1bfbf; --mut:#6b7682; --mut-bg:#eef1f4; --mut-bd:#dde2e7;
+    --info:#2f63ff; --info-bg:#eaf0ff; --info-bd:#c7d8ff;
+  }
+  html.dark {
+    --bg:#0a0c10; --bg-grid:#0e1116; --surface:#14181e; --surface-2:#1a1f27; --surface-3:#222831;
+    --border:#232a33; --border-2:#2f3947; --text:#e7eaef; --text-2:#9aa4b2; --text-3:#69727f;
+    --accent:#5b8cff; --accent-ink:#0a0c10; --accent-weak:#15233f; --term-bg:#07090c; --term-text:#cdd3db;
+    --ok:#4ade80; --ok-bg:#11271b; --ok-bd:#1f4d33; --warn:#f5b860; --warn-bg:#2a1f0e; --warn-bd:#5a4115;
+    --err:#f87171; --err-bg:#2a1313; --err-bd:#5a2424; --mut:#9aa4b2; --mut-bg:#1a1f27; --mut-bd:#2c343f;
+    --info:#5b8cff; --info-bg:#15233f; --info-bd:#2f4a7a;
+  }
+  * { -webkit-font-smoothing: antialiased; box-sizing: border-box; }
+  body { margin:0; font-family:"Inter",system-ui,sans-serif; background-color:var(--bg);
+    background-image:linear-gradient(var(--bg-grid) 1px,transparent 1px),linear-gradient(90deg,var(--bg-grid) 1px,transparent 1px);
+    background-size:44px 44px; color:var(--text); transition:background-color .25s,color .25s; }
+  .font-display{font-family:"Space Grotesk","Inter",sans-serif} .mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-variant-ligatures:none}
+
+  .btn{display:inline-flex;align-items:center;gap:.45rem;font-weight:550;font-size:.8125rem;line-height:1;padding:.5rem .8rem;border-radius:.5rem;cursor:pointer;border:1px solid var(--border-2);color:var(--text);background:var(--surface-2);transition:.14s;white-space:nowrap}
+  .btn:hover{background:var(--surface-3)} .btn-primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)} .btn-primary:hover{filter:brightness(1.07)}
+  .btn-ghost{background:transparent;border-color:transparent} .btn-ghost:hover{background:var(--surface-2)}
+  .btn-danger{color:var(--err);border-color:transparent;background:transparent} .btn-danger:hover{background:var(--err-bg)}
+  .btn-xs{padding:.32rem .6rem;font-size:.75rem;border-radius:.4rem} .btn:disabled{opacity:.45;cursor:not-allowed}
+
+  .nav-tab{font-size:.82rem;font-weight:550;padding:.4rem .7rem;border-radius:.5rem;color:var(--text-3);transition:.14s;text-decoration:none;display:inline-flex;align-items:center;gap:.4rem}
+  .nav-tab:hover{color:var(--text);background:var(--surface-2)} .nav-tab.active{color:var(--text);background:var(--surface-2);box-shadow:inset 0 0 0 1px var(--border)}
+
+  .field{background:var(--surface);border:1px solid var(--border-2);color:var(--text);border-radius:.5rem;font-size:.8125rem;padding:.55rem .7rem;transition:.14s;outline:none;width:100%}
+  .field:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+  select.field{appearance:none;cursor:pointer;background-image:url("data:image/svg+xml,%3Csvg width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%238b93a0' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .6rem center;padding-right:1.8rem}
+
+  .sdot{width:8px;height:8px;border-radius:999px;flex:none} .s-online{background:var(--ok)} .s-warn{background:var(--warn)} .s-offline{background:var(--err)} .s-pending{background:var(--info)}
+  .pulse{animation:pulse 1.6s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .badge{display:inline-flex;align-items:center;gap:.3rem;font-size:.7rem;font-weight:600;padding:.14rem .46rem;border-radius:999px;border:1px solid;white-space:nowrap}
+  .b-ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd)} .b-warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd)}
+  .b-err{color:var(--err);background:var(--err-bg);border-color:var(--err-bd)} .b-mut{color:var(--mut);background:var(--mut-bg);border-color:var(--mut-bd)}
+  .b-info{color:var(--info);background:var(--info-bg);border-color:var(--info-bd)}
+  .tag{font-family:"JetBrains Mono",monospace;font-size:.66rem;font-weight:500;padding:.08rem .36rem;border-radius:.3rem;border:1px solid var(--border-2);color:var(--text-3);background:var(--surface-2);letter-spacing:.02em}
+
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px}
+  .mrow{display:flex;align-items:center;gap:14px;padding:13px 16px}
+  .mrow + .mrow{border-top:1px solid var(--border)}
+  .grp-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-3);font-weight:600;padding:10px 16px;background:var(--surface-2);border-top:1px solid var(--border);display:flex;align-items:center;gap:8px}
+  .inline-name{font-size:14px;font-weight:600;background:transparent;border:1px solid transparent;border-radius:6px;padding:3px 6px;margin:-3px -6px;color:var(--text);width:auto;min-width:80px;max-width:240px}
+  .inline-name:hover{border-color:var(--border)} .inline-name:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak);outline:none;background:var(--surface)}
+
+  /* modal */
+  #ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50;display:none;align-items:center;justify-content:center;padding:18px}
+  #ov.show{display:flex}
+  .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;width:100%;max-width:540px;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 24px 70px rgba(0,0,0,.4);animation:pop .18s ease-out}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.99)}to{opacity:1;transform:none}}
+  .term{background:var(--term-bg);color:var(--term-text);font-family:"JetBrains Mono",monospace;font-size:12px;line-height:1.65;border-radius:10px;padding:13px 15px;white-space:pre-wrap;word-break:break-all;position:relative}
+  .copy-btn{position:absolute;top:9px;right:9px}
+  ::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:999px;border:3px solid transparent;background-clip:content-box}
+
+  .seg{display:flex;gap:3px;background:var(--surface-2);border-radius:9px;padding:3px}
+  .seg button{flex:1;font-size:12px;font-weight:550;padding:7px;border-radius:6px;color:var(--text-3);cursor:pointer;border:none;background:transparent}
+  .seg button.active{background:var(--surface);color:var(--text);box-shadow:0 1px 2px rgba(0,0,0,.14)}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:80;display:none}
+</style>
+</head>
+<body>
+  <header style="position:sticky;top:0;z-index:30;background:color-mix(in srgb,var(--surface) 90%,transparent);border-bottom:1px solid var(--border);backdrop-filter:blur(8px);">
+    <div style="max-width:1080px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:16px;">
+      <div style="display:flex;align-items:center;gap:10px;flex:none;">
+        <div style="display:grid;place-items:center;width:32px;height:32px;border-radius:9px;background:var(--accent);color:var(--accent-ink);">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+        <div style="line-height:1.1;"><div class="font-display" style="font-weight:700;font-size:15px;letter-spacing:-.01em;">cockpit</div><div style="font-size:11px;color:var(--text-3);">管理</div></div>
+      </div>
+      <nav style="display:flex;align-items:center;gap:4px;margin-left:6px;">
+        <a class="nav-tab" href="index.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>清單</a>
+        <a class="nav-tab" href="topology.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.2 7.2 16.5 11M7.2 16.8 16.5 13"/></svg>拓樸</a>
+        <a class="nav-tab" href="machine.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="7" y1="20" x2="17" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>機器</a>
+        <a class="nav-tab active" href="manage.html"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>管理</a>
+      </nav>
+      <div style="flex:1;"></div>
+      <button id="theme-btn" class="btn btn-ghost btn-xs" title="切換深/淺色" aria-label="切換深淺色">
+        <svg id="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg id="icon-sun" style="display:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main style="max-width:1080px;margin:0 auto;padding:24px 20px 80px;">
+    <!-- 機器管理 -->
+    <section style="margin-bottom:32px;">
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px;">
+        <div>
+          <h2 class="font-display" style="font-size:18px;font-weight:700;margin:0;">機器</h2>
+          <p style="font-size:12.5px;color:var(--text-3);margin:4px 0 0;">新增、命名、移除受監控的機器。新增時會產生帶 token 的安裝指令。</p>
+        </div>
+        <button id="add-machine" class="btn btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>新增機器</button>
+      </div>
+      <div id="machine-list" class="card" style="overflow:hidden;"></div>
+    </section>
+
+    <!-- 軟體管理 -->
+    <section>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:12px;margin-bottom:12px;">
+        <div>
+          <h2 class="font-display" style="font-size:18px;font-weight:700;margin:0;">軟體</h2>
+          <p style="font-size:12.5px;color:var(--text-3);margin:4px 0 0;">設定每台機器要追蹤的軟體：來源、檢查方式與更新策略。</p>
+        </div>
+        <button id="add-software" class="btn btn-primary"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg>新增軟體</button>
+      </div>
+      <div id="software-list" class="card" style="overflow:hidden;"></div>
+    </section>
+  </main>
+
+  <!-- modal 容器 -->
+  <div id="ov"><div id="modal" class="modal"></div></div>
+  <!-- toast -->
+  <div id="toast" class="toast"><div class="card" style="padding:10px 15px;box-shadow:0 10px 30px rgba(0,0,0,.3);display:flex;align-items:center;gap:9px;font-size:13px;"><span id="toast-icon"></span><span id="toast-msg"></span></div></div>
+
+  <script src="mock-data.js"></script>
+  <script src="topo-data.js"></script>
+  <script src="store.js"></script>
+  <script src="manage.js"></script>
+</body>
+</html>

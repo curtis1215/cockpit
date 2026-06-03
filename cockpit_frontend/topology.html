@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-Hant" class="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>cockpit · 拓樸 · 系統監控</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+
+<style>
+  /* ---------- 主題色票（與清單頁一致） ---------- */
+  :root {
+    --bg:#f5f6f8; --bg-grid:#eceef1; --surface:#ffffff; --surface-2:#f0f2f4; --surface-3:#e7eaee;
+    --border:#e2e6ea; --border-2:#d3d9df; --text:#161a1f; --text-2:#5b636e; --text-3:#8b93a0;
+    --accent:#2f63ff; --accent-ink:#ffffff; --accent-weak:#eaf0ff;
+    --ok:#1f9d5b; --ok-bg:#e4f5ec; --ok-bd:#b9e6cd;
+    --warn:#b5680a; --warn-bg:#fbeede; --warn-bd:#f1d5ab;
+    --err:#cf3030; --err-bg:#fbe6e6; --err-bd:#f1bfbf;
+    --mut:#6b7682; --mut-bg:#eef1f4; --mut-bd:#dde2e7;
+    --edge:#c2cad3; --edge-dim:#e4e8ec;
+  }
+  html.dark {
+    --bg:#0a0c10; --bg-grid:#0e1116; --surface:#14181e; --surface-2:#1a1f27; --surface-3:#222831;
+    --border:#232a33; --border-2:#2f3947; --text:#e7eaef; --text-2:#9aa4b2; --text-3:#69727f;
+    --accent:#5b8cff; --accent-ink:#0a0c10; --accent-weak:#15233f;
+    --ok:#4ade80; --ok-bg:#11271b; --ok-bd:#1f4d33;
+    --warn:#f5b860; --warn-bg:#2a1f0e; --warn-bd:#5a4115;
+    --err:#f87171; --err-bg:#2a1313; --err-bd:#5a2424;
+    --mut:#9aa4b2; --mut-bg:#1a1f27; --mut-bd:#2c343f;
+    --edge:#37424f; --edge-dim:#1c222b;
+  }
+
+  * { -webkit-font-smoothing: antialiased; box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Inter", system-ui, sans-serif;
+    background-color: var(--bg);
+    background-image: linear-gradient(var(--bg-grid) 1px, transparent 1px),
+                      linear-gradient(90deg, var(--bg-grid) 1px, transparent 1px);
+    background-size: 44px 44px;
+    color: var(--text); transition: background-color .25s, color .25s;
+  }
+  .font-display { font-family: "Space Grotesk", "Inter", sans-serif; }
+  .mono { font-family: "JetBrains Mono", ui-monospace, monospace; font-variant-ligatures: none; }
+
+  .btn { display:inline-flex; align-items:center; gap:.45rem; font-weight:550; font-size:.8125rem;
+    line-height:1; padding:.5rem .8rem; border-radius:.5rem; cursor:pointer; border:1px solid var(--border-2);
+    color:var(--text); background:var(--surface-2); transition:.14s; white-space:nowrap; }
+  .btn:hover { background: var(--surface-3); }
+  .btn-ghost { background: transparent; border-color: transparent; }
+  .btn-ghost:hover { background: var(--surface-2); }
+  .btn-xs { padding:.3rem .55rem; font-size:.75rem; border-radius:.4rem; }
+
+  /* nav tabs */
+  .nav-tab { font-size:.82rem; font-weight:550; padding:.4rem .7rem; border-radius:.5rem;
+    color:var(--text-3); transition:.14s; text-decoration:none; display:inline-flex; align-items:center; gap:.4rem; }
+  .nav-tab:hover { color: var(--text); background: var(--surface-2); }
+  .nav-tab.active { color: var(--text); background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* 狀態色點 */
+  .sdot { width:8px; height:8px; border-radius:999px; flex:none; }
+  .s-online{ background:var(--ok);} .s-warn{ background:var(--warn);} .s-offline{ background:var(--err);} .s-pending{ background:var(--accent);}
+  .pulse { animation: pulse 1.6s ease-in-out infinite; } @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .spin { animation: spin 1s linear infinite; } @keyframes spin{to{transform:rotate(360deg)}}
+
+  .badge { display:inline-flex; align-items:center; gap:.3rem; font-size:.68rem; font-weight:600;
+    padding:.12rem .42rem; border-radius:999px; border:1px solid; white-space:nowrap; }
+  .b-ok{color:var(--ok);background:var(--ok-bg);border-color:var(--ok-bd);}
+  .b-warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-bd);}
+  .b-err{color:var(--err);background:var(--err-bg);border-color:var(--err-bd);}
+  .b-mut{color:var(--mut);background:var(--mut-bg);border-color:var(--mut-bd);}
+
+  .tag { font-family:"JetBrains Mono",monospace; font-size:.62rem; font-weight:500; padding:.06rem .32rem;
+    border-radius:.3rem; border:1px solid var(--border-2); color:var(--text-3); background:var(--surface-2); letter-spacing:.02em; }
+
+  /* ============ 拓樸畫布 ============ */
+  #canvas { position: relative; min-height: calc(100vh - 94px); overflow-x: auto; }
+  #topo { position: relative; min-width: 880px; padding: 26px 30px 60px; }
+  #edges { position: absolute; top:0; left:0; pointer-events: none; z-index: 1; overflow: visible; display:block; }
+  .cols { position: relative; z-index: 2; display: grid; grid-template-columns: minmax(248px,300px) minmax(210px,260px) minmax(210px,260px);
+    gap: 76px; align-items: start; }
+  .col-head { font-size:.7rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em;
+    color:var(--text-3); margin: 0 4px 12px; display:flex; align-items:center; gap:.45rem; }
+  .col-stack { display:flex; flex-direction:column; gap:14px; }
+  body.density-compact .col-stack { gap: 9px; }
+  body.density-compact .m-node { padding: 9px 11px 9px 14px; }
+  body.density-compact .s-node, body.density-compact .w-node { padding: 7px 10px 7px 13px; }
+  body.density-compact .metric-row { margin-top: 5px; }
+
+  /* ---- Tweaks 面板 ---- */
+  #tweaks { position: fixed; right: 18px; bottom: 18px; z-index: 70; width: 268px;
+    background: var(--surface); border: 1px solid var(--border-2); border-radius: 14px;
+    box-shadow: 0 18px 50px rgba(0,0,0,.34); display: none; overflow: hidden; }
+  #tweaks.show { display: block; }
+  .tw-head { display:flex; align-items:center; justify-content:space-between; padding:11px 13px; border-bottom:1px solid var(--border); }
+  .tw-body { padding: 6px 13px 13px; max-height: 70vh; overflow-y: auto; }
+  .tw-sec { font-size:10.5px; text-transform:uppercase; letter-spacing:.07em; color:var(--text-3); font-weight:600; margin:13px 0 7px; }
+  .tw-row { margin-bottom: 9px; }
+  .tw-lbl { font-size:12px; color:var(--text-2); margin-bottom:5px; display:flex; justify-content:space-between; }
+  .tw-seg { display:flex; gap:3px; background:var(--surface-2); border-radius:9px; padding:3px; }
+  .tw-seg button { flex:1; font-size:11.5px; font-weight:550; padding:5px 6px; border-radius:6px; color:var(--text-3); cursor:pointer; border:none; background:transparent; transition:.14s; }
+  .tw-seg button.active { background:var(--surface); color:var(--text); box-shadow:0 1px 2px rgba(0,0,0,.14); }
+  .tw-switch { width:34px; height:20px; border-radius:999px; background:var(--border-2); position:relative; cursor:pointer; transition:.16s; flex:none; }
+  .tw-switch.on { background:var(--accent); }
+  .tw-switch i { position:absolute; top:2px; left:2px; width:16px; height:16px; border-radius:999px; background:#fff; transition:transform .16s; }
+  .tw-switch.on i { transform:translateX(14px); }
+  .tw-range { width:100%; accent-color:var(--accent); }
+
+  /* 節點通用 */
+  .node { position: relative; border:1px solid var(--border); background:var(--surface); border-radius:12px;
+    transition: box-shadow .16s, border-color .16s, opacity .16s, transform .16s; cursor:pointer; }
+  .node:hover { border-color: var(--border-2); }
+  .node.dim { opacity: .28; }
+  .node.hl { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak), 0 8px 24px rgba(0,0,0,.18); }
+  .node.pinned { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent); }
+  .node-l { position:absolute; left:0; top:10px; bottom:10px; width:3px; border-radius:0 3px 3px 0; }
+
+  /* 機器節點 */
+  .m-node { padding: 12px 13px 12px 16px; }
+  .m-top { display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }
+  .m-name { font-family:"Space Grotesk",sans-serif; font-weight:600; font-size:14px; line-height:1.15; }
+  .m-role { font-size:11px; color:var(--text-3); margin-top:1px; }
+  .metric-row { display:flex; align-items:center; gap:7px; margin-top:7px; }
+  .metric-row .lbl { font-size:10px; color:var(--text-3); width:30px; flex:none; letter-spacing:.02em; }
+  .bar { flex:1; height:5px; border-radius:999px; background:var(--surface-3); overflow:hidden; }
+  .bar > i { display:block; height:100%; border-radius:999px; }
+  .metric-row .val { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--text-2); width:34px; text-align:right; flex:none; }
+  .m-foot { display:flex; align-items:center; gap:8px; margin-top:9px; padding-top:8px; border-top:1px solid var(--border);
+    font-size:10.5px; color:var(--text-3); flex-wrap:wrap; }
+
+  /* 服務節點 */
+  .s-node { padding: 9px 11px 9px 14px; }
+  .s-top { display:flex; align-items:center; gap:7px; }
+  .s-name { font-weight:550; font-size:12.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .s-meta { display:flex; align-items:center; gap:8px; margin-top:5px; font-size:10.5px; color:var(--text-3); }
+
+  /* 軟體節點 */
+  .w-node { padding: 9px 11px 9px 14px; }
+  .w-top { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .w-name { font-weight:550; font-size:12.5px; }
+  .w-meta { display:flex; align-items:center; gap:7px; margin-top:5px; }
+  .w-ver { font-family:"JetBrains Mono",monospace; font-size:10.5px; color:var(--text-3); }
+
+  /* edges */
+  .edge { fill:none; stroke:var(--edge); stroke-width:1.6; transition: stroke .16s, opacity .16s, stroke-width .16s; }
+  .edge.dep { stroke-dasharray:4 4; }
+  .edge.dim { stroke:var(--edge-dim); }
+  .edge.act { stroke-width:2.4; }
+  .edge.e-ok{stroke:var(--ok);} .edge.e-warn{stroke:var(--warn);} .edge.e-err{stroke:var(--err);}
+
+  /* 詳情抽屜 */
+  #overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:40; opacity:0; transition:opacity .2s; display:none; }
+  #drawer { position:fixed; top:0; right:0; height:100%; width:100%; max-width:404px; background:var(--surface);
+    border-left:1px solid var(--border); z-index:50; transform:translateX(100%);
+    transition:transform .3s cubic-bezier(.22,.61,.36,1); display:flex; flex-direction:column; }
+  #drawer.open { transform: translateX(0); }
+  #overlay.show { opacity: 1; }
+
+  ::-webkit-scrollbar{width:10px;height:10px} ::-webkit-scrollbar-thumb{background:var(--border-2);border-radius:999px;border:3px solid transparent;background-clip:content-box} ::-webkit-scrollbar-thumb:hover{background:var(--text-3);background-clip:content-box}
+  .pop-in{animation:popIn .2s ease-out} @keyframes popIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .md p{margin:.3rem 0} .md ul{margin:.3rem 0;padding-left:1.05rem;list-style:disc} .md li{margin:.24rem 0}
+  .md strong{color:var(--text);font-weight:650} .md code{font-family:"JetBrains Mono",monospace;font-size:.82em;background:var(--surface-2);padding:.04rem .28rem;border-radius:.25rem;border:1px solid var(--border)}
+</style>
+</head>
+
+<body>
+  <!-- ============ HEADER ============ -->
+  <header class="sticky top-0 z-30" style="background:color-mix(in srgb,var(--surface) 90%,transparent); border-bottom:1px solid var(--border); backdrop-filter:blur(8px);">
+    <div style="max-width:1480px; margin:0 auto; padding:10px 20px; display:flex; align-items:center; gap:16px;">
+      <div style="display:flex; align-items:center; gap:10px; flex:none;">
+        <div style="display:grid; place-items:center; width:32px; height:32px; border-radius:9px; background:var(--accent); color:var(--accent-ink);">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        </div>
+        <div style="line-height:1.1;">
+          <div class="font-display" style="font-weight:700; font-size:15px; letter-spacing:-.01em;">cockpit</div>
+          <div style="font-size:11px; color:var(--text-3);">拓樸 · 系統監控</div>
+        </div>
+      </div>
+
+      <!-- nav -->
+      <nav style="display:flex; align-items:center; gap:4px; margin-left:6px;">
+        <a class="nav-tab" href="index.html">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          清單
+        </a>
+        <a class="nav-tab active" href="topology.html">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2.5"/><circle cx="5" cy="18" r="2.5"/><circle cx="19" cy="12" r="2.5"/><path d="M7.2 7.2 16.5 11M7.2 16.8 16.5 13"/></svg>
+          拓樸
+        </a>
+        <a class="nav-tab" href="machine.html">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="7" y1="20" x2="17" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>
+          機器
+        </a>
+        <a class="nav-tab" href="manage.html">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          管理
+        </a>
+      </nav>
+
+      <div style="flex:1;"></div>
+
+      <!-- 健康摘要 -->
+      <div id="summary" style="display:flex; align-items:center; gap:14px; font-size:12px; color:var(--text-2);"></div>
+
+      <!-- 只看有問題 -->
+      <button id="filter-issues" class="btn btn-xs" aria-pressed="false">
+        <span class="sdot s-warn"></span>只看有問題
+      </button>
+
+      <button id="theme-btn" class="btn btn-ghost btn-xs" title="切換深/淺色" aria-label="切換深淺色">
+        <svg id="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg id="icon-sun" style="display:none;" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </button>
+    </div>
+
+    <!-- 圖例 -->
+    <div style="border-top:1px solid var(--border);">
+      <div style="max-width:1480px; margin:0 auto; padding:6px 20px; display:flex; align-items:center; gap:18px; font-size:11px; color:var(--text-3); flex-wrap:wrap;">
+        <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-online"></span>線上</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-warn"></span>注意</span>
+        <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-offline"></span>離線 / 錯誤</span>
+        <span style="width:1px; height:12px; background:var(--border);"></span>
+        <span style="display:flex; align-items:center; gap:6px;"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="var(--edge)" stroke-width="1.6"/></svg>運行 / 依附</span>
+        <span style="display:flex; align-items:center; gap:6px;"><svg width="22" height="8"><line x1="0" y1="4" x2="22" y2="4" stroke="var(--edge)" stroke-width="1.6" stroke-dasharray="4 4"/></svg>服務依賴</span>
+        <span style="margin-left:auto; color:var(--text-3);">點節點看詳情 · 滑過高亮關聯</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ============ 畫布 ============ -->
+  <div id="canvas">
+    <div id="topo">
+      <svg id="edges"></svg>
+      <div class="cols">
+        <div>
+          <div class="col-head"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><line x1="7" y1="20" x2="17" y2="20"/><line x1="12" y1="16" x2="12" y2="20"/></svg>機器 <span id="c-machine" class="mono" style="color:var(--text-3)"></span></div>
+          <div id="col-machines" class="col-stack"></div>
+        </div>
+        <div>
+          <div class="col-head"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><line x1="7" y1="6.5" x2="7.01" y2="6.5"/><line x1="7" y1="17.5" x2="7.01" y2="17.5"/></svg>服務 <span id="c-service" class="mono" style="color:var(--text-3)"></span></div>
+          <div id="col-services" class="col-stack"></div>
+        </div>
+        <div>
+          <div class="col-head"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 3 7v10l9 5 9-5V7Z"/><path d="m3 7 9 5 9-5M12 12v10"/></svg>軟體 <span id="c-software" class="mono" style="color:var(--text-3)"></span></div>
+          <div id="col-software" class="col-stack"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 詳情抽屜 ============ -->
+  <div id="overlay"></div>
+  <aside id="drawer">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:13px 16px; border-bottom:1px solid var(--border); flex:none;">
+      <div id="drawer-title" style="display:flex; align-items:center; gap:8px; min-width:0;"></div>
+      <button id="drawer-close" class="btn btn-ghost btn-xs" aria-label="關閉">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="drawer-body" style="overflow-y:auto; flex:1; padding:16px;"></div>
+  </aside>
+
+  <!-- ============ Tweaks 面板 ============ -->
+  <div id="tweaks">
+    <div class="tw-head">
+      <span class="font-display" style="font-weight:600; font-size:13px;">Tweaks · 佈局</span>
+      <button id="tw-close" class="btn btn-ghost btn-xs" aria-label="關閉">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="tw-body" id="tw-body"></div>
+  </div>
+
+  <script src="mock-data.js"></script>
+  <script src="topo-data.js"></script>
+  <script src="store.js"></script>
+  <script src="topo.js"></script>
+</body>
+</html>
