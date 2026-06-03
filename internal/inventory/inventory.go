@@ -1,0 +1,134 @@
+package inventory
+
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+type Machine struct {
+	Name       string
+	Host       string
+	SSHUser    string
+	Local      bool
+	AgentToken string
+}
+type Update struct {
+	Type, Cmd, Runner, Prompt, Machine, Cwd, Invoke string
+}
+type Install struct {
+	Machine, CurrentCmd string
+	Update              Update
+	VersionRegex        string
+}
+type Software struct {
+	Name, Kind, LatestSource, Changelog string
+	Installs                            []Install
+}
+type Inventory struct {
+	Machines map[string]Machine
+	Software []Software
+}
+
+func LoadText(b []byte) (Inventory, error) {
+	var raw struct {
+		Machines map[string]map[string]any `yaml:"machines"`
+		Software []struct {
+			Name         string `yaml:"name"`
+			Kind         string `yaml:"kind"`
+			LatestSource string `yaml:"latest_source"`
+			Changelog    string `yaml:"changelog"`
+			Installs     []struct {
+				Machine      string         `yaml:"machine"`
+				CurrentCmd   string         `yaml:"current_cmd"`
+				VersionRegex string         `yaml:"version_regex"`
+				Update       map[string]any `yaml:"update"`
+			} `yaml:"installs"`
+		} `yaml:"software"`
+	}
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		return Inventory{}, fmt.Errorf("yaml: %w", err)
+	}
+	inv := Inventory{Machines: map[string]Machine{}}
+	for name, m := range raw.Machines {
+		host, _ := m["host"].(string)
+		ssh, _ := m["ssh_user"].(string)
+		if host == "" || ssh == "" {
+			return Inventory{}, fmt.Errorf("machine %s: need host and ssh_user", name)
+		}
+		local, _ := m["local"].(bool)
+		tok, _ := m["agent_token"].(string)
+		inv.Machines[name] = Machine{Name: name, Host: host, SSHUser: ssh, Local: local, AgentToken: tok}
+	}
+	for _, sw := range raw.Software {
+		if sw.Name == "" {
+			return Inventory{}, fmt.Errorf("software missing name")
+		}
+		if sw.LatestSource == "" {
+			return Inventory{}, fmt.Errorf("software %s: need latest_source", sw.Name)
+		}
+		kind := sw.Kind
+		if kind == "" {
+			kind = "custom"
+		}
+		out := Software{Name: sw.Name, Kind: kind, LatestSource: sw.LatestSource, Changelog: sw.Changelog}
+		for i, inst := range sw.Installs {
+			if _, ok := inv.Machines[inst.Machine]; !ok {
+				return Inventory{}, fmt.Errorf("software %s install[%d]: unknown machine %q", sw.Name, i, inst.Machine)
+			}
+			if inst.CurrentCmd == "" {
+				return Inventory{}, fmt.Errorf("software %s install[%d]: need current_cmd", sw.Name, i)
+			}
+			up, err := parseUpdate(inst.Update, fmt.Sprintf("software %s install[%d]", sw.Name, i))
+			if err != nil {
+				return Inventory{}, err
+			}
+			out.Installs = append(out.Installs, Install{Machine: inst.Machine, CurrentCmd: inst.CurrentCmd, Update: up, VersionRegex: inst.VersionRegex})
+		}
+		inv.Software = append(inv.Software, out)
+	}
+	return inv, nil
+}
+
+func parseUpdate(raw map[string]any, ctx string) (Update, error) {
+	s := func(k string) string { v, _ := raw[k].(string); return v }
+	t := s("type")
+	switch t {
+	case "command":
+		if s("cmd") == "" {
+			return Update{}, fmt.Errorf("%s: command update needs cmd", ctx)
+		}
+		return Update{Type: "command", Cmd: s("cmd")}, nil
+	case "agent":
+		if s("runner") == "" {
+			return Update{}, fmt.Errorf("%s: agent update needs runner", ctx)
+		}
+		if s("prompt") == "" {
+			return Update{}, fmt.Errorf("%s: agent update needs prompt", ctx)
+		}
+		return Update{Type: "agent", Runner: s("runner"), Prompt: s("prompt"), Machine: s("machine"), Cwd: s("cwd"), Invoke: s("invoke")}, nil
+	default:
+		return Update{}, fmt.Errorf("%s: unknown update.type %q", ctx, t)
+	}
+}
+
+func Load(path string) (Inventory, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return Inventory{}, err
+	}
+	return LoadText(b)
+}
+
+func MachineForToken(inv Inventory, token string) string {
+	if token == "" {
+		return ""
+	}
+	for name, m := range inv.Machines {
+		if m.AgentToken != "" && m.AgentToken == token {
+			return name
+		}
+	}
+	return ""
+}
