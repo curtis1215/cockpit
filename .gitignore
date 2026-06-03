@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# SQLite
+*.db
+*.sqlite
+*.sqlite3
+
+# Local config / secrets
+inventory.local.yaml
+.env
+*.local
+
+# OS
+.DS_Store
