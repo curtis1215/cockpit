@@ -1,12 +1,17 @@
 package agent
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
+	"github.com/curtis1215/cockpit/internal/executor"
 	"github.com/curtis1215/cockpit/internal/httpx"
+	"github.com/curtis1215/cockpit/internal/version"
 )
 
 type Agent struct {
@@ -88,4 +93,95 @@ func (a *Agent) Run() error {
 		_ = a.heartbeat() // 失敗就下個週期重試
 		time.Sleep(time.Duration(interval) * time.Second)
 	}
+}
+
+type installDef struct {
+	Software     string `json:"software"`
+	CurrentCmd   string `json:"current_cmd"`
+	VersionRegex string `json:"version_regex"`
+}
+
+// Job 描述 server 下派的升級任務。
+type Job struct {
+	ID           int64  `json:"id"`
+	Software     string `json:"software"`
+	Machine      string `json:"machine"`
+	ShellCmd     string `json:"shell_cmd"`
+	Cwd          string `json:"cwd"`
+	CurrentCmd   string `json:"current_cmd"`
+	VersionRegex string `json:"version_regex"`
+}
+
+// ReportVersions 讀 server 的 install 定義、本機跑 current_cmd 解析版本、回報。
+func (a *Agent) ReportVersions(execTimeout time.Duration) {
+	var defs []installDef
+	if _, err := a.c().GetJSON("/api/agent/installs", a.Token, &defs); err != nil {
+		return
+	}
+	var reports []map[string]string
+	for _, d := range defs {
+		cur := ""
+		executor.Run(context.Background(), d.CurrentCmd, "", execTimeout, func(l string) {
+			if v := version.Parse(l, d.VersionRegex); v != "" && cur == "" {
+				cur = v
+			}
+		})
+		reports = append(reports, map[string]string{"software": d.Software, "current_version": cur})
+	}
+	if len(reports) > 0 {
+		a.c().PostJSON("/api/agent/report-versions", a.Token, reports, nil)
+	}
+}
+
+// RunJob 執行 server 渲染好的指令：串流 log、輪詢 abort、成功後驗證新版本、回報結果。
+func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var aborted atomic.Bool
+	stop := make(chan struct{})
+	defer close(stop)
+	go func() {
+		tk := time.NewTicker(controlInterval)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				var ctrl struct {
+					Abort bool `json:"abort"`
+				}
+				if _, err := a.c().GetJSON(fmt.Sprintf("/api/agent/jobs/%d/control", job.ID), a.Token, &ctrl); err == nil && ctrl.Abort {
+					aborted.Store(true)
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	post := func(line string) {
+		a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": []string{line}}, nil)
+	}
+	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, post)
+	if aborted.Load() {
+		post("■ 已由使用者中止")
+		a.reportResult(job.ID, "aborted", res.ExitCode, "")
+		return
+	}
+	if res.ExitCode != 0 {
+		a.reportResult(job.ID, "failed", res.ExitCode, "")
+		return
+	}
+	newVer := ""
+	executor.Run(context.Background(), job.CurrentCmd, job.Cwd, execTimeout, func(l string) {
+		if v := version.Parse(l, job.VersionRegex); v != "" && newVer == "" {
+			newVer = v
+		}
+	})
+	a.reportResult(job.ID, "success", res.ExitCode, newVer)
+}
+
+func (a *Agent) reportResult(jobID int64, status string, exit int, newVersion string) {
+	a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/result", jobID), a.Token,
+		map[string]any{"status": status, "exit_code": exit, "new_version": newVersion}, nil)
 }

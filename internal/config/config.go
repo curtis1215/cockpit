@@ -6,9 +6,11 @@ import (
 )
 
 type ServeConfig struct {
-	Listen       string `json:"listen"`
-	DBPath       string `json:"db_path"`
-	EnrollSecret string `json:"enroll_secret"`
+	Listen        string `json:"listen"`
+	DBPath        string `json:"db_path"`
+	EnrollSecret  string `json:"enroll_secret"`
+	InventoryPath string `json:"inventory_path"`
+	CheckHours    int    `json:"check_hours"`
 }
 
 type AgentConfig struct {
