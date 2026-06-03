@@ -46,8 +46,9 @@ func main() {
 		if err := pollOnce(c, execTimeout); err != nil {
 			log.Printf("poll error: %v (backoff %v)", err, backoff)
 			time.Sleep(backoff)
-			if backoff < 30*time.Second {
-				backoff *= 2
+			backoff *= 2
+			if backoff > 30*time.Second {
+				backoff = 30 * time.Second
 			}
 			continue
 		}
