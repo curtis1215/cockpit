@@ -19,9 +19,6 @@ def _latest_map(conn) -> dict[str, str]:
     return db.latest_version_map(conn)
 
 
-def _spawn_job(conn, inv, job_id):
-    threading.Thread(target=jobs.run_job, args=(conn, inv, job_id), daemon=True).start()
-
 
 def create_app(conn, inv: Inventory) -> FastAPI:
     app = FastAPI(title="cockpit")
@@ -76,6 +73,8 @@ def create_app(conn, inv: Inventory) -> FastAPI:
     @app.post("/api/check")
     def check():
         threading.Thread(target=refresh_upstream, args=(conn, inv), daemon=True).start()
+        for name in inv.machines:
+            db.set_check_requested(conn, name)
         return {"started": True}
 
     @app.post("/api/installs/{software}/{machine}/update")
@@ -86,7 +85,6 @@ def create_app(conn, inv: Inventory) -> FastAPI:
             raise HTTPException(404, "install not found")
         except jobs.ActiveJobExists:
             raise HTTPException(409, "update already in progress")
-        _spawn_job(conn, inv, jid)
         return {"job_id": jid}
 
     @app.get("/api/jobs/{job_id}")

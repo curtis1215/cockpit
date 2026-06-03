@@ -36,20 +36,16 @@ def test_changelog_endpoint(tmp_path):
     assert r.json()["changelog_zh"] == "中文"
 
 
-def test_trigger_update_creates_job(tmp_path, monkeypatch):
+def test_trigger_update_creates_job(tmp_path):
     app, c = _app(tmp_path)
-    import cockpit.web.app as webapp
-    monkeypatch.setattr(webapp, "_spawn_job", lambda conn, inv, jid: None)  # 不真跑
     r = TestClient(app).post("/api/installs/cc/mac/update")
     assert r.status_code == 200
     jid = r.json()["job_id"]
     assert db.get_job(c, jid)["software"] == "cc"
 
 
-def test_trigger_update_conflict_returns_409(tmp_path, monkeypatch):
+def test_trigger_update_conflict_returns_409(tmp_path):
     app, c = _app(tmp_path)
-    import cockpit.web.app as webapp
-    monkeypatch.setattr(webapp, "_spawn_job", lambda conn, inv, jid: None)
     client = TestClient(app)
     assert client.post("/api/installs/cc/mac/update").status_code == 200
     # first job stays 'queued' (spawn stubbed) → second is blocked
@@ -80,3 +76,13 @@ def test_list_jobs_endpoint(tmp_path):
     rows = TestClient(app).get("/api/jobs").json()
     assert len(rows) == 1
     assert rows[0]["software"] == "cc"
+
+
+def test_abort_endpoint(tmp_path):
+    app, c = _app(tmp_path)
+    client = TestClient(app)
+    jid = client.post("/api/installs/cc/mac/update").json()["job_id"]   # stays queued
+    r = client.post(f"/api/jobs/{jid}/abort")
+    assert r.status_code == 200
+    assert r.json()["status"] == "aborted"
+    assert client.post("/api/jobs/9999/abort").status_code == 404
