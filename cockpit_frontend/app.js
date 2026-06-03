@@ -10,13 +10,54 @@
    完整端點 / SSE / htmx partial 契約見：cockpit/api-contract.md
    ============================================================= */
 (() => {
-  const { MACHINES, INSTALLS, VERSIONS, JOBS, JOB_SCRIPTS } = window.MOCK;
   const $ = (s, r = document) => r.querySelector(s);
+
+  /* ---- module-level mutable state (loaded from real APIs) ---- */
+  let INSTALLS = [], MACHINES = [], JOBS = [];
+  const JOB_SCRIPTS = {}; // FE-2 將移除模擬腳本；先留空物件避免引用爆炸
+
+  async function api(path, opts) {
+    const r = await fetch(path, opts);
+    if (!r.ok) { const e = new Error(`${path} → ${r.status}`); e.status = r.status; throw e; }
+    return r.status === 204 ? null : r.json();
+  }
+  async function loadInstalls() {
+    const rows = await api("/api/installs");
+    INSTALLS = rows.map((r) => ({ ...r, checked_at: r.last_checked }));
+    MACHINES = [...new Set(INSTALLS.map((i) => i.machine))].sort();
+  }
+  async function loadJobs() {
+    const rows = await api("/api/jobs");
+    JOBS = rows.map((j) => ({
+      ...j,
+      id: String(j.id),
+      installId: j.software + "::" + j.machine,
+      log: (j.log || "").split("\n").filter(Boolean),
+    }));
+  }
+
+  function showLoadError() {
+    const tbody = $("#table-body");
+    if (tbody) {
+      tbody.innerHTML = `<tr><td colspan="7" class="px-4 py-10 text-center" style="color: var(--err);">
+        <div class="flex flex-col items-center gap-2">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/></svg>
+          <span class="text-[13px]">無法連線後端，請確認服務是否正常運作。</span>
+        </div>
+      </td></tr>`;
+    }
+    const tableWrap = $("#table-wrap");
+    if (tableWrap) {
+      tableWrap.classList.remove("hidden");
+      $("#empty-state").classList.add("hidden");
+      $("#empty-state").classList.remove("flex");
+    }
+  }
 
   /* ---- 可變狀態（render 都讀這裡）---- */
   const state = {
-    installs: structuredClone(INSTALLS),   // 會就地更新版本/狀態
-    jobs: structuredClone(JOBS),           // 最近工作（新的在前）
+    installs: [],   // 從 loadInstalls() 填充
+    jobs: [],       // 從 loadJobs() 填充
     filters: { machine: "", onlyUpdates: false, q: "" },
     group: "flat",            // flat | machine | status
     activeJobId: null,
@@ -59,13 +100,19 @@
   /* ============================================================
      篩選
      ============================================================ */
-  function initFilters() {
+  function populateMachineFilter() {
     const sel = $("#filter-machine");
+    // 清除舊選項（除了第一個「全部機器」佔位符）
+    while (sel.options.length > 1) sel.remove(1);
     MACHINES.forEach((m) => {
       const o = document.createElement("option");
       o.value = m; o.textContent = m;
       sel.appendChild(o);
     });
+  }
+
+  function initFilters() {
+    const sel = $("#filter-machine");
     sel.addEventListener("change", (e) => { state.filters.machine = e.target.value; render(); });
 
     $("#filter-search").addEventListener("input", (e) => {
@@ -159,7 +206,7 @@
 
   function changelogLink(it) {
     const key = `${it.software}@${it.latest_version}`;
-    if (it.latest_version && VERSIONS[key])
+    if (it.latest_version)
       return `<button class="text-[12px] font-medium hover:underline" style="color: var(--accent);" data-changelog="${key}">中文</button>`;
     return `<span class="text-[12px]" style="color: var(--text-3);">—</span>`;
   }
@@ -266,18 +313,32 @@
   /* ============================================================
      Changelog Modal
      ============================================================ */
-  function openChangelog(key) {
-    const v = VERSIONS[key];
-    if (!v) return;
-    $("#modal-software").textContent = v.software;
-    $("#modal-version").textContent = "v" + v.version;
-    $("#modal-date").textContent = "發布於 " + v.released_at;
-    $("#modal-zh").innerHTML = mdToHtml(v.changelog_zh);
-    $("#modal-raw").textContent = v.changelog_raw;
-    $("#modal-raw-wrap").open = false;
+  async function openChangelog(key) {
+    // key 格式：software@latest_version（由 changelogLink 產生）
+    const atIdx = key.lastIndexOf("@");
+    const sw  = key.slice(0, atIdx);
+    const ver = key.slice(atIdx + 1);
+
+    // 先開 modal，填「載入中」
+    $("#modal-software").textContent = sw;
+    $("#modal-version").textContent  = "v" + ver;
+    $("#modal-date").textContent     = "";
+    $("#modal-zh").innerHTML         = `<p style="color: var(--text-3);">載入中…</p>`;
+    $("#modal-raw").textContent      = "";
+    $("#modal-raw-wrap").open        = false;
     const ov = $("#modal-overlay");
     ov.classList.remove("hidden"); ov.classList.add("flex");
     requestAnimationFrame(() => (ov.style.opacity = "1"));
+
+    try {
+      const v = await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}`);
+      $("#modal-date").textContent = v.released_at ? "發布於 " + v.released_at : "";
+      $("#modal-zh").innerHTML     = mdToHtml(v.changelog_zh || "");
+      $("#modal-raw").textContent  = v.changelog_raw || "";
+    } catch (e) {
+      const msg = e.status === 404 ? "尚無 changelog" : "無法載入 changelog";
+      $("#modal-zh").innerHTML = `<p style="color: var(--text-3);">${msg}</p>`;
+    }
   }
   function closeModal() {
     const ov = $("#modal-overlay");
@@ -610,8 +671,26 @@
 
     const jb = e.target.closest("[data-job]");
     if (jb) {
-      const job = state.jobs.find((j) => j.id === jb.getAttribute("data-job"));
-      if (job) { state.activeJobId = job.id; renderCurrentJob(job); renderRecentJobs(); }
+      const jobId = jb.getAttribute("data-job");
+      const cached = state.jobs.find((j) => j.id === jobId);
+      if (cached) {
+        state.activeJobId = cached.id; renderCurrentJob(cached); renderRecentJobs();
+        // 若 job 已結束，重抓最新資料再更新顯示
+        if (cached.status !== "running") {
+          api(`/api/jobs/${encodeURIComponent(jobId)}`).then((raw) => {
+            const fresh = {
+              ...raw,
+              id: String(raw.id),
+              installId: raw.software + "::" + raw.machine,
+              log: (raw.log || "").split("\n").filter(Boolean),
+            };
+            const idx = state.jobs.findIndex((j) => j.id === fresh.id);
+            if (idx >= 0) state.jobs[idx] = fresh;
+            if (state.activeJobId === fresh.id) renderCurrentJob(fresh);
+            renderRecentJobs();
+          }).catch(() => {/* silent – already showing cached data */});
+        }
+      }
     }
   });
 
@@ -638,11 +717,24 @@
       </div>`;
   }
 
-  initTheme();
-  initFilters();
-  setGroup(localStorage.getItem("cockpit-group") || "flat");
-  setLayout(localStorage.getItem("cockpit-panel-layout") || "side");
-  emptyCurrentJob();
-  renderRecentJobs();
-  render();
+  (async () => {
+    initTheme();
+    initFilters();
+    setGroup(localStorage.getItem("cockpit-group") || "flat");
+    setLayout(localStorage.getItem("cockpit-panel-layout") || "side");
+    emptyCurrentJob();
+    try {
+      await loadInstalls();
+      await loadJobs();
+      // 把真實資料填入 state
+      state.installs = structuredClone(INSTALLS);
+      state.jobs     = structuredClone(JOBS);
+      populateMachineFilter();  // MACHINES 已從 loadInstalls 填入
+    } catch (e) {
+      console.error("cockpit: failed to load data", e);
+      showLoadError();
+    }
+    render();
+    renderRecentJobs();
+  })();
 })();
