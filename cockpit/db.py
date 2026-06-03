@@ -164,3 +164,67 @@ def get_install(conn, software, machine):
     return conn.execute(
         "SELECT * FROM installs WHERE software=? AND machine=?",
         (software, machine)).fetchone()
+
+
+@_synchronized
+def set_job_dispatch(conn, job_id, cmd, cwd, current_cmd, version_regex):
+    conn.execute(
+        "UPDATE jobs SET cmd=?, cwd=?, current_cmd=?, version_regex=? WHERE id=?",
+        (cmd, cwd, current_cmd, version_regex, job_id),
+    )
+    conn.commit()
+
+
+@_synchronized
+def claim_oldest_queued(conn, machine):
+    """原子取該機最舊 queued job 並標 running，回該 row（無則 None）。"""
+    row = conn.execute(
+        "SELECT * FROM jobs WHERE machine=? AND status='queued' ORDER BY id LIMIT 1",
+        (machine,),
+    ).fetchone()
+    if row is None:
+        return None
+    conn.execute(
+        "UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=?",
+        (row["id"],),
+    )
+    conn.commit()
+    return row
+
+
+@_synchronized
+def request_abort(conn, job_id):
+    conn.execute("UPDATE jobs SET abort_requested=1 WHERE id=?", (job_id,))
+    conn.commit()
+
+
+@_synchronized
+def abort_requested(conn, job_id):
+    row = conn.execute("SELECT abort_requested FROM jobs WHERE id=?", (job_id,)).fetchone()
+    return bool(row and row["abort_requested"])
+
+
+@_synchronized
+def set_check_requested(conn, machine):
+    conn.execute(
+        """INSERT INTO machine_state (machine, check_requested, updated_at)
+           VALUES (?, 1, datetime('now'))
+           ON CONFLICT(machine) DO UPDATE SET check_requested=1, updated_at=datetime('now')""",
+        (machine,),
+    )
+    conn.commit()
+
+
+@_synchronized
+def take_check_requested(conn, machine):
+    row = conn.execute(
+        "SELECT check_requested FROM machine_state WHERE machine=?", (machine,)
+    ).fetchone()
+    requested = bool(row and row["check_requested"])
+    if requested:
+        conn.execute(
+            "UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=?",
+            (machine,),
+        )
+        conn.commit()
+    return requested

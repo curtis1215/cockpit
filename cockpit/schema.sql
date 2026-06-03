@@ -28,7 +28,12 @@ CREATE TABLE IF NOT EXISTS jobs (
   finished_at TEXT,
   exit_code INTEGER,
   new_version TEXT,
-  log TEXT NOT NULL DEFAULT ''
+  log TEXT NOT NULL DEFAULT '',
+  cmd TEXT,
+  cwd TEXT,
+  current_cmd TEXT,
+  version_regex TEXT,
+  abort_requested INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -38,4 +43,10 @@ CREATE TABLE IF NOT EXISTS events (
   software TEXT,
   machine TEXT,
   detail TEXT
+);
+
+CREATE TABLE IF NOT EXISTS machine_state (
+  machine TEXT PRIMARY KEY,
+  check_requested INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT DEFAULT (datetime('now'))
 );
