@@ -26,3 +26,24 @@ COCKPIT_INVENTORY=inventory.yaml python -m cockpit.main   # 監聽 127.0.0.1:878
 
 ## 5. SSH 前置
 mac mini → 各機器設定金鑰免密碼登入；agent 型更新需目標機器上 `codex` / `claude` CLI 已登入。
+
+## 6. cockpit-agent（每台機器）
+
+每台機器跑一隻 `cockpit-agent`（取代獨立 beszel service，改由 agent 督管 beszel-agent）。
+
+```bash
+# 在開發機 build（或交叉編譯 GOOS/GOARCH）
+cd agent && go build -o cockpit-agent .
+# 部署到目標機
+scp cockpit-agent target:/usr/local/bin/cockpit-agent
+# 設定（每機唯一 agent_token，需同時寫入 server 真實 inventory.yaml 該機的 agent_token）
+sudo mkdir -p /etc/cockpit-agent && sudo cp agent/deploy/config.example.json /etc/cockpit-agent/config.json && sudo vi /etc/cockpit-agent/config.json
+# Linux: systemd
+sudo cp agent/deploy/cockpit-agent.service /etc/systemd/system/ && sudo systemctl enable --now cockpit-agent
+# macOS: launchd
+sudo cp agent/deploy/cockpit-agent.plist /Library/LaunchDaemons/co.sitruc.cockpit-agent.plist && sudo launchctl load /Library/LaunchDaemons/co.sitruc.cockpit-agent.plist
+```
+
+- Cloudflare：`/api/agent/*` 設 Access **Bypass**（agent 以 app 層 Bearer token 把關），其餘路徑維持 Bypass(信任IP)/Allow(登入)。
+- 架構改為 agent 主動 outbound HTTPS（CF tunnel），**不再使用 Tailscale**。
+- 首次升級需刪舊 `cockpit.db`（schema 加欄位）。

@@ -1,7 +1,7 @@
 machines:
-  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }
-  ubuntu_llm: { host: 100.0.0.0, ssh_user: curtis }
-  macmini:    { host: 100.106.177.80, ssh_user: curtis }
+  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }   # agent_token: <每機唯一 token，僅放真實 inventory.yaml>
+  ubuntu_llm: { host: 100.0.0.0, ssh_user: curtis }                     # agent_token: <...>
+  macmini:    { host: 100.106.177.80, ssh_user: curtis }                # agent_token: <...>
 
 software:
   - name: claude-code
