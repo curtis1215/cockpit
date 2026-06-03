@@ -73,3 +73,32 @@ func TestRunJobFailure(t *testing.T) {
 }
 
 func endsWith(s, suf string) bool { return len(s) >= len(suf) && s[len(s)-len(suf):] == suf }
+
+func TestPollOnce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/agent/poll" {
+			if r.URL.Query().Get("wait") != "0" {
+				t.Errorf("wait param: %s", r.URL.Query().Get("wait"))
+			}
+			json.NewEncoder(w).Encode(map[string]any{"type": "job", "job": map[string]any{"id": 5, "shell_cmd": "echo hi"}})
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok"}
+	evt, job, err := a.pollOnce(0)
+	if err != nil || evt != "job" || job.ID != 5 || job.ShellCmd != "echo hi" {
+		t.Fatalf("poll: %q %+v %v", evt, job, err)
+	}
+}
+
+func TestPollOnce204(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(204)
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok"}
+	evt, _, err := a.pollOnce(0)
+	if err != nil || evt != "" {
+		t.Fatalf("204 poll: %q %v", evt, err)
+	}
+}

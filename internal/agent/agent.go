@@ -80,7 +80,27 @@ func (a *Agent) RunOnce() error {
 	return a.heartbeat()
 }
 
-// Run：enroll（必要時）後進入 heartbeat 迴圈，直到 process 結束。
+type pollResp struct {
+	Type string `json:"type"`
+	Job  Job    `json:"job"`
+}
+
+// pollOnce 長輪詢一次：回 ("",_,nil) 表示無工作（204）。
+func (a *Agent) pollOnce(waitSec int) (string, Job, error) {
+	var pr pollResp
+	code, err := a.c().GetJSON(fmt.Sprintf("/api/agent/poll?wait=%d", waitSec), a.Token, &pr)
+	if err != nil {
+		return "", Job{}, err
+	}
+	if code == 204 {
+		return "", Job{}, nil
+	}
+	return pr.Type, pr.Job, nil
+}
+
+// Run：enroll 後啟動兩個迴圈——heartbeat（背景）與版本追蹤主迴圈（long-poll 取工作）。
+// 注意：若設定檔放的是 inventory agent_token（而非 enroll 取得的 systems token），
+// heartbeat 會 401——P1 已知雙 token 並存，P3 收斂；heartbeat 失敗只略過不中斷。
 func (a *Agent) Run() error {
 	if err := a.ensureEnrolled(); err != nil {
 		return err
@@ -89,9 +109,25 @@ func (a *Agent) Run() error {
 	if interval <= 0 {
 		interval = 15
 	}
+	go func() {
+		for {
+			_ = a.heartbeat() // 失敗就下個週期重試
+			time.Sleep(time.Duration(interval) * time.Second)
+		}
+	}()
+	a.ReportVersions(60 * time.Second)
 	for {
-		_ = a.heartbeat() // 失敗就下個週期重試
-		time.Sleep(time.Duration(interval) * time.Second)
+		evt, job, err := a.pollOnce(25)
+		if err != nil {
+			time.Sleep(3 * time.Second)
+			continue
+		}
+		switch evt {
+		case "job":
+			a.RunJob(job, 2*time.Second, 30*time.Minute)
+		case "check":
+			a.ReportVersions(60 * time.Second)
+		}
 	}
 }
 
