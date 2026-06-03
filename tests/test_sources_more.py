@@ -1,4 +1,5 @@
 import httpx
+import pytest
 from cockpit.models import Software
 from cockpit.sources import fetch_latest
 
@@ -31,8 +32,15 @@ def test_claude_plugin_uses_github_release():
     assert res.version == "1.4.0"
 
 
-def test_custom_uses_latest_cmd(monkeypatch):
+def test_custom_uses_latest_cmd():
     sw = Software(name="x", kind="custom",
                   latest_source="custom:echo 9.9.9", changelog=None, installs=[])
     res = fetch_latest(sw, client=_client(lambda req: httpx.Response(404)))
     assert res.version == "9.9.9"
+
+
+def test_custom_nonzero_exit_raises():
+    sw = Software(name="x", kind="custom",
+                  latest_source="custom:exit 7", changelog=None, installs=[])
+    with pytest.raises(RuntimeError):
+        fetch_latest(sw, client=_client(lambda req: httpx.Response(404)))
