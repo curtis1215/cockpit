@@ -1,9 +1,11 @@
 from __future__ import annotations
+import asyncio
 import threading
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
+from sse_starlette.sse import EventSourceResponse
 
 from cockpit import db, jobs
 from cockpit.collector import run_collection
@@ -67,6 +69,28 @@ def create_app(conn, inv: Inventory) -> FastAPI:
         if not job:
             raise HTTPException(404, "job not found")
         return dict(job)
+
+    @app.get("/api/jobs/{job_id}/log/stream")
+    async def stream_log(job_id: int):
+        async def gen():
+            sent = 0
+            while True:
+                job = db.get_job(conn, job_id)
+                if not job:
+                    yield {"event": "error", "data": "job not found"}
+                    return
+                log = job["log"] or ""
+                lines = log.split("\n")
+                # 已完成的行（最後一段可能是未換行的殘段，這裡 log 都以 \n 結尾）
+                ready = lines[:-1] if log.endswith("\n") else lines
+                for line in ready[sent:]:
+                    yield {"event": "log", "data": line}
+                sent = len(ready)
+                if job["status"] in ("success", "failed"):
+                    yield {"event": "done", "data": job["status"]}
+                    return
+                await asyncio.sleep(0.5)
+        return EventSourceResponse(gen())
 
     if STATIC_DIR.exists():
         app.mount("/", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
