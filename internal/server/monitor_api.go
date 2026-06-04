@@ -168,11 +168,11 @@ func liveStatus(x store.SystemWithLatest) string {
 	if x.LastSeen != "" {
 		t, err := time.Parse("2006-01-02 15:04:05", x.LastSeen)
 		if err == nil {
-			// also try RFC3339 (RegisterSystem uses RFC3339)
 			if time.Since(t) > 60*time.Second {
 				return "offline"
 			}
 		} else {
+			// also try RFC3339 (RegisterSystem uses RFC3339)
 			t2, err2 := time.Parse(time.RFC3339, x.LastSeen)
 			if err2 == nil && time.Since(t2) > 60*time.Second {
 				return "offline"
@@ -305,9 +305,21 @@ func (s *Server) apiServices(w http.ResponseWriter, r *http.Request) {
 	}
 	out := []map[string]any{}
 	for _, x := range rows {
+		var swOut, depOut any
+		if x.SoftwareIDs != "" {
+			var sw []string
+			json.Unmarshal([]byte(x.SoftwareIDs), &sw)
+			swOut = sw
+		}
+		if x.Depends != "" {
+			var dep []string
+			json.Unmarshal([]byte(x.Depends), &dep)
+			depOut = dep
+		}
 		out = append(out, map[string]any{
 			"system_id": x.SystemID, "name": x.Name, "kind": x.Kind,
 			"status": x.Status, "cpu": fv2(x.CPU), "mem": fv2(x.Mem), "port": x.Port,
+			"software_ids": swOut, "depends": depOut,
 		})
 	}
 	writeJSON(w, 200, out)
@@ -325,7 +337,7 @@ func (s *Server) apiVMs(w http.ResponseWriter, r *http.Request) {
 		out = append(out, map[string]any{
 			"host_system_id": x.HostSystemID, "name": x.Name, "uuid": x.UUID,
 			"vmx_path": x.VmxPath, "state": x.State, "vcpu": x.VCPU, "ram_mb": x.RamMB,
-			"guest_os": x.GuestOS, "linked_system_id": x.LinkedSystemID,
+			"guest_os": x.GuestOS, "linked_system_id": nilIfEmpty(x.LinkedSystemID),
 		})
 	}
 	writeJSON(w, 200, out)

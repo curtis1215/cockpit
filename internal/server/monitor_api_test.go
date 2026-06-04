@@ -49,17 +49,25 @@ func TestMetricsRange(t *testing.T) {
 func TestServicesAndVMsAPI(t *testing.T) {
 	srv, st := vtServer(t)
 	id, _ := st.EnsureSystemForMachine("mac")
-	st.ReplaceServices(id, []store.ServiceRow{{Name: "redis", Kind: "docker", Status: "running"}})
+	st.ReplaceServices(id, []store.ServiceRow{{Name: "redis", Kind: "docker", Status: "running", SoftwareIDs: `["x"]`}})
 	st.ReplaceVMs(id, []store.VMRow{{Name: "v1", UUID: "u", State: "running"}})
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/services", nil))
 	if !strings.Contains(rec.Body.String(), `"redis"`) {
 		t.Fatalf("services: %s", rec.Body.String())
 	}
+	// software_ids JSON 字串應 unmarshal 後輸出為陣列
+	if !strings.Contains(rec.Body.String(), `"software_ids":["x"]`) {
+		t.Fatalf("services software_ids: %s", rec.Body.String())
+	}
 	rec2 := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/api/vms", nil))
 	if !strings.Contains(rec2.Body.String(), `"v1"`) {
 		t.Fatalf("vms: %s", rec2.Body.String())
+	}
+	// unlinked vm → linked_system_id 應為 JSON null
+	if !strings.Contains(rec2.Body.String(), `"linked_system_id":null`) {
+		t.Fatalf("vms linked null: %s", rec2.Body.String())
 	}
 }
 
