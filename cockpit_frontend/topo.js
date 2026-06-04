@@ -643,4 +643,5 @@
   const onResize = () => { clearTimeout(rt); rt = setTimeout(drawEdges, 80); };
   new ResizeObserver(onResize).observe(topo);
   window.addEventListener("resize", onResize);
+  window.addEventListener("topo:refresh", () => { renderAll(); renderSummary(); drawEdges(); });
 })();

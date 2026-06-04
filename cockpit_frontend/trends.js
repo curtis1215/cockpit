@@ -329,4 +329,5 @@
 
   initTheme();
   render();
+  window.addEventListener("trends:refresh", () => render());
 })();
