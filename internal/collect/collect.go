@@ -114,7 +114,7 @@ func (c *Collector) Collect() (Metrics, error) {
 		}
 	}
 
-	// ── Network byte rates (bytes/sec, only after second call) ────────────────
+	// ── Network rates (MB/s, only after second call) ─────────────────────────
 	now := time.Now()
 	if io, err := gnet.IOCounters(false); err == nil && len(io) > 0 {
 		sent := io[0].BytesSent
@@ -122,8 +122,8 @@ func (c *Collector) Collect() (Metrics, error) {
 		if !c.prevAt.IsZero() {
 			dt := now.Sub(c.prevAt).Seconds()
 			if dt > 0 {
-				up := float64(sent-c.prevSent) / dt
-				down := float64(recv-c.prevRecv) / dt
+				up := float64(sent-c.prevSent) / dt / 1024 / 1024
+				down := float64(recv-c.prevRecv) / dt / 1024 / 1024
 				if up >= 0 && down >= 0 {
 					m.NetUp = pf(round2(up))
 					m.NetDown = pf(round2(down))
