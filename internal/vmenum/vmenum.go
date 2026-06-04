@@ -115,7 +115,7 @@ func (e *Enumerator) Enumerate() ([]VM, error) {
 
 // parseVmx parses key = "value" lines from a .vmx file.
 func parseVmx(path, content string) VM {
-	vm := VM{VmxPath: path}
+	vm := VM{VmxPath: path, Name: strings.TrimSuffix(filepath.Base(path), ".vmx")}
 	for _, line := range strings.Split(content, "\n") {
 		i := strings.Index(line, "=")
 		if i < 0 {

@@ -23,6 +23,16 @@ func TestParseVmx(t *testing.T) {
 	}
 }
 
+func TestParseVmxNameFallback(t *testing.T) {
+	vm := parseVmx("/p/noname.vmx", `memsize = "1024"`)
+	if vm.Name != "noname" {
+		t.Fatalf("name fallback: %q", vm.Name)
+	}
+	if vm.RamMB != 1024 {
+		t.Fatalf("ram: %d", vm.RamMB)
+	}
+}
+
 const vmrunOut = `Total running VMs: 2
 /Users/alice/Virtual Machines.localized/ubuntu-vm/ubuntu-vm.vmx
 /Users/alice/Virtual Machines.localized/win11/win11.vmx
