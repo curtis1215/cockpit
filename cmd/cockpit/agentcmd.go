@@ -20,6 +20,7 @@ func runAgent(args []string) {
 	a := &agent.Agent{
 		ServerURL:    cfg.ServerURL,
 		Secret:       cfg.EnrollSecret,
+		EnrollToken:  cfg.EnrollToken,
 		Token:        cfg.AgentToken,
 		Version:      version,
 		HeartbeatSec: cfg.HeartbeatSec,

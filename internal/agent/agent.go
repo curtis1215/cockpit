@@ -20,6 +20,7 @@ import (
 type Agent struct {
 	ServerURL    string
 	Secret       string
+	EnrollToken  string
 	Token        string
 	Version      string
 	HeartbeatSec int
@@ -45,20 +46,26 @@ func hostLabel() string {
 	return h
 }
 
-// ensureEnrolled：若無 token，用 secret 換 token 並落地。
+// ensureEnrolled：若無 token，用 enroll_token（每機一次性，優先）或 enroll_secret 換 token 並落地。
 func (a *Agent) ensureEnrolled() error {
 	if a.Token != "" {
 		return nil
 	}
-	if a.Secret == "" {
-		return errors.New("agent: no agent_token and no enroll_secret")
+	if a.Secret == "" && a.EnrollToken == "" {
+		return errors.New("agent: no agent_token and no enroll_token/enroll_secret")
+	}
+	body := map[string]string{
+		"label": hostLabel(), "os": runtime.GOOS, "arch": runtime.GOARCH,
+	}
+	if a.EnrollToken != "" {
+		body["enroll_token"] = a.EnrollToken
+	} else {
+		body["enroll_secret"] = a.Secret
 	}
 	var out struct {
 		AgentToken string `json:"agent_token"`
 	}
-	_, err := a.c().PostJSON("/api/agent/enroll", "", map[string]string{
-		"label": hostLabel(), "os": runtime.GOOS, "arch": runtime.GOARCH, "enroll_secret": a.Secret,
-	}, &out)
+	_, err := a.c().PostJSON("/api/agent/enroll", "", body, &out)
 	if err != nil {
 		return err
 	}

@@ -16,6 +16,7 @@ type ServeConfig struct {
 type AgentConfig struct {
 	ServerURL    string `json:"server_url"`
 	EnrollSecret string `json:"enroll_secret"`
+	EnrollToken  string `json:"enroll_token"` // 每機一次性 token（manage 頁產生），優先於 enroll_secret
 	AgentToken   string `json:"agent_token"`
 	HeartbeatSec int    `json:"heartbeat_sec"`
 	path         string // 來源檔，供寫回 agent_token 用
