@@ -158,12 +158,16 @@ func fv2(p *float64) any {
 	return *p
 }
 
-// liveStatus derives online/warn/offline from SystemWithLatest data.
+// liveStatus derives online/warn/offline/pending from SystemWithLatest data.
 // Logic:
+//   - pending: status=="pending" && no metrics ever reported (Latest.TS==0)
 //   - offline: last_seen > 60s ago (parse failure → never offline)
 //   - warn:    cpu>90 || mem>90 || disk>90 || temp>85
 //   - else:    online
 func liveStatus(x store.SystemWithLatest) string {
+	if x.Status == "pending" && x.Latest.TS == 0 {
+		return "pending"
+	}
 	// Parse last_seen: SQLite datetime('now') → "2006-01-02 15:04:05"
 	if x.LastSeen != "" {
 		t, err := time.Parse("2006-01-02 15:04:05", x.LastSeen)
@@ -205,18 +209,25 @@ func systemMap(x store.SystemWithLatest) map[string]any {
 	}
 }
 
-// apiSystemsEnriched replaces the P0 /api/systems handler with enriched output.
+// apiSystemsEnriched handles GET (list) and POST (create pending) for /api/systems.
 func (s *Server) apiSystemsEnriched(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.st.SystemsWithLatest()
-	if err != nil {
-		writeJSON(w, 500, map[string]string{"error": err.Error()})
-		return
+	switch r.Method {
+	case http.MethodGet:
+		rows, err := s.st.SystemsWithLatest()
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		out := []map[string]any{}
+		for _, x := range rows {
+			out = append(out, systemMap(x))
+		}
+		writeJSON(w, 200, out)
+	case http.MethodPost:
+		s.createSystem(w, r)
+	default:
+		w.WriteHeader(405)
 	}
-	out := []map[string]any{}
-	for _, x := range rows {
-		out = append(out, systemMap(x))
-	}
-	writeJSON(w, 200, out)
 }
 
 // rangeTypeDef maps a range query string to a metrics type and window.
@@ -233,7 +244,7 @@ var rangeMap = map[string]rangeTypeDef{
 	"30d": {"480m", 30 * 24 * 3600},
 }
 
-// apiSystemSub handles GET /api/systems/{id} and /api/systems/{id}/metrics?range=
+// apiSystemSub handles /api/systems/{id}[/subpath] for GET, PATCH, DELETE, and subpaths.
 func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 	// strip "/api/systems/" prefix
 	path := strings.TrimPrefix(r.URL.Path, "/api/systems/")
@@ -244,7 +255,42 @@ func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find system
+	sub := ""
+	if len(parts) == 2 {
+		sub = parts[1]
+	}
+
+	// Handle subpath actions before loading system (some don't need it)
+	if sub == "enroll-token" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		s.regenEnrollToken(w, r, id)
+		return
+	}
+
+	// DELETE: cascade remove
+	if r.Method == http.MethodDelete && sub == "" {
+		if err := s.st.DeleteSystemCascade(id); err != nil {
+			if err == store.ErrNotFound {
+				writeJSON(w, 404, map[string]string{"error": "system not found"})
+				return
+			}
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(204)
+		return
+	}
+
+	// PATCH: update label/role
+	if r.Method == http.MethodPatch && sub == "" {
+		s.patchSystem(w, r, id)
+		return
+	}
+
+	// Find system for GET operations
 	rows, err := s.st.SystemsWithLatest()
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -262,12 +308,12 @@ func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(parts) == 1 {
+	if sub == "" {
 		writeJSON(w, 200, systemMap(*found))
 		return
 	}
 
-	if parts[1] == "metrics" {
+	if sub == "metrics" {
 		rng := r.URL.Query().Get("range")
 		rt, ok := rangeMap[rng]
 		if !ok {

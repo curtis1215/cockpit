@@ -22,12 +22,36 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		Label        string `json:"label"`
 		OS           string `json:"os"`
 		Arch         string `json:"arch"`
+		AgentVersion string `json:"agent_version"`
 		EnrollSecret string `json:"enroll_secret"`
+		EnrollToken  string `json:"enroll_token"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
 		return
 	}
+
+	// Per-machine enroll token path (new)
+	if body.EnrollToken != "" {
+		sys, err := s.st.SystemByEnrollToken(body.EnrollToken)
+		if err != nil {
+			writeJSON(w, 401, map[string]string{"error": "invalid enroll token"})
+			return
+		}
+		agentToken, err := s.st.ConsumeEnrollToken(sys.ID, body.OS, body.Arch)
+		if err != nil {
+			writeJSON(w, 401, map[string]string{"error": "enroll token already used"})
+			return
+		}
+		// Update agent_version if provided
+		if body.AgentVersion != "" {
+			s.st.HeartbeatByID(sys.ID, body.AgentVersion)
+		}
+		writeJSON(w, 200, map[string]string{"system_id": sys.ID, "agent_token": agentToken})
+		return
+	}
+
+	// Legacy enroll_secret path
 	if s.enrollSecret == "" || body.EnrollSecret != s.enrollSecret {
 		writeJSON(w, 401, map[string]string{"error": "invalid enroll secret"})
 		return

@@ -15,6 +15,7 @@ import (
 var schema string
 
 var ErrNotFound = errors.New("not found")
+var ErrConflict = errors.New("conflict")
 
 type System struct {
 	ID           string `json:"id"`
@@ -29,6 +30,7 @@ type System struct {
 	AgentStatus  string `json:"agent_status"`
 	LastSeen     string `json:"last_seen"`
 	AgentToken   string `json:"-"`
+	EnrollToken  string `json:"-"`
 	Created      int64  `json:"created"`
 }
 
@@ -73,15 +75,16 @@ func (s *Store) RegisterSystem(label, osName, arch string) (string, string, erro
 
 func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 	var s System
-	var hostID, agentToken sql.NullString
+	var hostID, agentToken, enrollToken sql.NullString
 	err := row.Scan(&s.ID, &s.Label, &s.Role, &s.OS, &s.Arch, &s.Kind, &hostID,
-		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &s.Created)
+		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &enrollToken, &s.Created)
 	s.HostID = hostID.String
 	s.AgentToken = agentToken.String
+	s.EnrollToken = enrollToken.String
 	return s, err
 }
 
-const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,created"
+const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,enroll_token,created"
 
 func (s *Store) SystemByID(id string) (System, error) {
 	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE id=?", id)
@@ -145,6 +148,157 @@ func (s *Store) ListSystems() ([]System, error) {
 		out = append(out, sys)
 	}
 	return out, rows.Err()
+}
+
+// ── Machine lifecycle management ─────────────────────────────────────────────
+
+// CreateSystemPending creates a pending system with a one-time enroll token.
+// Returns (id, enrollToken, error). If label already exists, returns ErrConflict.
+func (s *Store) CreateSystemPending(label, role string) (string, string, error) {
+	id := "sys_" + randHex(6)
+	enrollToken := "ck_enroll_" + randHex(12)
+	_, err := s.db.Exec(
+		`INSERT INTO systems (id,label,role,kind,status,agent_status,enroll_token,created)
+		 VALUES (?,?,?,'physical','pending','pending',?,unixepoch())`,
+		id, label, role, enrollToken)
+	if err != nil {
+		// SQLite unique constraint violation on label or enroll_token
+		if isUniqueErr(err) {
+			return "", "", ErrConflict
+		}
+		return "", "", err
+	}
+	return id, enrollToken, nil
+}
+
+// isUniqueErr checks if an error is a SQLite unique constraint violation.
+func isUniqueErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return contains(s, "UNIQUE constraint failed") || contains(s, "unique constraint")
+}
+
+func contains(s, sub string) bool {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return true
+		}
+	}
+	return false
+}
+
+// SystemByEnrollToken looks up a system by its enroll token.
+func (s *Store) SystemByEnrollToken(token string) (System, error) {
+	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE enroll_token=?", token)
+	sys, err := scanSystem(row)
+	if err == sql.ErrNoRows {
+		return System{}, ErrNotFound
+	}
+	return sys, err
+}
+
+// ConsumeEnrollToken activates a pending system: sets os/arch/status/agent_token, clears enroll_token.
+// Returns the new agent token.
+func (s *Store) ConsumeEnrollToken(id, osName, arch string) (string, error) {
+	agentToken := "ck_agent_" + randHex(20)
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(
+		`UPDATE systems SET os=?, arch=?, status='online', agent_status='ok',
+		 last_seen=?, agent_token=?, enroll_token=NULL WHERE id=? AND enroll_token IS NOT NULL`,
+		osName, arch, now, agentToken, id)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return agentToken, nil
+}
+
+// RegenEnrollToken generates a new enroll token for a system (invalidating the old one).
+func (s *Store) RegenEnrollToken(id string) (string, error) {
+	newToken := "ck_enroll_" + randHex(12)
+	res, err := s.db.Exec(`UPDATE systems SET enroll_token=? WHERE id=?`, newToken, id)
+	if err != nil {
+		return "", err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return "", ErrNotFound
+	}
+	return newToken, nil
+}
+
+// UpdateSystem updates label and/or role of a system. Empty string means keep current value.
+func (s *Store) UpdateSystem(id, label, role string) error {
+	if label == "" && role == "" {
+		return nil
+	}
+	if label != "" && role != "" {
+		res, err := s.db.Exec(`UPDATE systems SET label=?, role=? WHERE id=?`, label, role, id)
+		if err != nil {
+			if isUniqueErr(err) {
+				return ErrConflict
+			}
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	}
+	if label != "" {
+		res, err := s.db.Exec(`UPDATE systems SET label=? WHERE id=?`, label, id)
+		if err != nil {
+			if isUniqueErr(err) {
+				return ErrConflict
+			}
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return ErrNotFound
+		}
+		return nil
+	}
+	// role only
+	res, err := s.db.Exec(`UPDATE systems SET role=? WHERE id=?`, role, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// DeleteSystemCascade removes a system and all its associated data.
+func (s *Store) DeleteSystemCascade(id string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, q := range []string{
+		`DELETE FROM metrics WHERE system_id=?`,
+		`DELETE FROM metrics_latest WHERE system_id=?`,
+		`DELETE FROM services WHERE system_id=?`,
+		`DELETE FROM vms WHERE host_system_id=?`,
+		`UPDATE vms SET linked_system_id=NULL WHERE linked_system_id=?`,
+		`DELETE FROM systems WHERE id=?`,
+	} {
+		if _, err := tx.Exec(q, id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// LabelExists checks if any system has the given label (used for unique label enforcement).
+func (s *Store) LabelExists(label string) bool {
+	var n int
+	s.db.QueryRow(`SELECT COUNT(1) FROM systems WHERE label=?`, label).Scan(&n)
+	return n > 0
 }
 
 // ── Version tracker types and methods ───────────────────────────────────────

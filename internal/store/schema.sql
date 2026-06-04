@@ -1,6 +1,6 @@
 CREATE TABLE IF NOT EXISTS systems (
   id            TEXT PRIMARY KEY,
-  label         TEXT NOT NULL,
+  label         TEXT NOT NULL UNIQUE,
   role          TEXT NOT NULL DEFAULT '',
   os            TEXT NOT NULL DEFAULT '',
   arch          TEXT NOT NULL DEFAULT '',
@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS systems (
   agent_status  TEXT NOT NULL DEFAULT 'pending',
   last_seen     TEXT NOT NULL DEFAULT '',
   agent_token   TEXT UNIQUE,
+  enroll_token  TEXT UNIQUE,
   created       INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS versions (
