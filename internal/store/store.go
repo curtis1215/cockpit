@@ -73,10 +73,11 @@ func (s *Store) RegisterSystem(label, osName, arch string) (string, string, erro
 
 func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 	var s System
-	var hostID sql.NullString
+	var hostID, agentToken sql.NullString
 	err := row.Scan(&s.ID, &s.Label, &s.Role, &s.OS, &s.Arch, &s.Kind, &hostID,
-		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &s.AgentToken, &s.Created)
+		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &s.Created)
 	s.HostID = hostID.String
+	s.AgentToken = agentToken.String
 	return s, err
 }
 

@@ -38,3 +38,24 @@ CREATE TABLE IF NOT EXISTS machine_state (
   machine TEXT PRIMARY KEY, check_requested INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS metrics (
+  system_id TEXT NOT NULL, type TEXT NOT NULL, ts INTEGER NOT NULL,
+  cpu REAL, mem REAL, disk REAL, gpu REAL, net_up REAL, net_down REAL, load REAL, temp REAL,
+  PRIMARY KEY (system_id, type, ts)
+);
+CREATE TABLE IF NOT EXISTS metrics_latest (
+  system_id TEXT PRIMARY KEY, ts INTEGER NOT NULL,
+  cpu REAL, mem REAL, disk REAL, gpu REAL, net_up REAL, net_down REAL, load REAL, temp REAL, uptime REAL,
+  spark TEXT NOT NULL DEFAULT '[]'
+);
+CREATE TABLE IF NOT EXISTS services (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, system_id TEXT NOT NULL,
+  name TEXT NOT NULL, kind TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'running',
+  cpu REAL, mem REAL, port INTEGER, software_ids TEXT, depends TEXT
+);
+CREATE TABLE IF NOT EXISTS vms (
+  host_system_id TEXT NOT NULL, name TEXT NOT NULL, uuid TEXT NOT NULL,
+  vmx_path TEXT, state TEXT NOT NULL, vcpu INTEGER, ram_mb INTEGER, guest_os TEXT,
+  linked_system_id TEXT, last_seen TEXT DEFAULT (datetime('now')),
+  PRIMARY KEY (host_system_id, uuid)
+);
