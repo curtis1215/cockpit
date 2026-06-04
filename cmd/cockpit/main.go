@@ -19,6 +19,10 @@ func main() {
 		runAgent(os.Args[2:])
 	case "version":
 		fmt.Println("cockpit", version)
+	case "upgrade":
+		runUpgrade(os.Args[2:])
+	case "service":
+		runService(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -26,5 +30,5 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cockpit <serve|agent|version> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cockpit <serve|agent|version|upgrade|service> [flags]")
 }
