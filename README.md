@@ -39,6 +39,8 @@ cockpit version
 }
 ```
 
+> **注意**：SQLite db 檔請固定由同一使用者存取——以 root（systemd 服務）執行時，不要沿用先前以一般使用者手動執行所建立的 db/-wal/-shm 檔（會得到 `attempt to write a readonly database`）。換執行身份時請換 db 路徑或先刪除舊 db。
+
 - `enroll_secret`：agent 申請 token 時使用的共享密鑰，`inventory_path` 指定機器清單（每台機器取得 `agent_token` 後寫入此檔）
 
 啟動（前景）：
