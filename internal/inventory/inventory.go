@@ -74,8 +74,10 @@ func LoadText(b []byte) (Inventory, error) {
 		}
 		out := Software{Name: sw.Name, Kind: kind, LatestSource: sw.LatestSource, Changelog: sw.Changelog}
 		for i, inst := range sw.Installs {
-			if _, ok := inv.Machines[inst.Machine]; !ok {
-				return Inventory{}, fmt.Errorf("software %s install[%d]: unknown machine %q", sw.Name, i, inst.Machine)
+			// 注意：install.Machine 不再要求存在於 inventory.machines——
+			// P3 起機器由 DB（systems）管理，inventory.machines 為 legacy/optional。
+			if inst.Machine == "" {
+				return Inventory{}, fmt.Errorf("software %s install[%d]: need machine", sw.Name, i)
 			}
 			if inst.CurrentCmd == "" {
 				return Inventory{}, fmt.Errorf("software %s install[%d]: need current_cmd", sw.Name, i)

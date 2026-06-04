@@ -49,7 +49,8 @@ func TestValidation(t *testing.T) {
 	if _, err := LoadText([]byte(bad)); err == nil {
 		t.Fatal("want error for missing ssh_user")
 	}
-	bad2 := `
+	// P3 起 install.machine 可指向 DB 管理的機器（不必在 inventory.machines）——僅要求非空。
+	ok2 := `
 machines: { mac: { host: x, ssh_user: c } }
 software:
   - name: s
@@ -59,8 +60,21 @@ software:
         current_cmd: "x"
         update: { type: command, cmd: "y" }
 `
+	if _, err := LoadText([]byte(ok2)); err != nil {
+		t.Fatalf("db-managed machine ref should load: %v", err)
+	}
+	bad2 := `
+machines: {}
+software:
+  - name: s
+    latest_source: "x"
+    installs:
+      - machine: ""
+        current_cmd: "x"
+        update: { type: command, cmd: "y" }
+`
 	if _, err := LoadText([]byte(bad2)); err == nil {
-		t.Fatal("want error for unknown machine ref")
+		t.Fatal("want error for empty machine")
 	}
 }
 
