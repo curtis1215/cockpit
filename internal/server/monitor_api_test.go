@@ -8,6 +8,61 @@ import (
 	"github.com/curtis1215/cockpit/internal/store"
 )
 
+func fpt(v float64) *float64 { return &v }
+
+func TestSystemsEnrichedAndStatus(t *testing.T) {
+	srv, st := vtServer(t)
+	postJSON(t, srv, "/api/agent/report-metrics", "tok-mac", `{"ts":1000,"cpu":42.5,"mem":95.0,"disk":70.1}`)
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/systems", nil))
+	b := rec.Body.String()
+	if !strings.Contains(b, `"cpu":42.5`) || !strings.Contains(b, `"spark":[42.5]`) {
+		t.Fatalf("enriched: %s", b)
+	}
+	if !strings.Contains(b, `"status":"warn"`) { // mem 95 → warn（last_seen 剛 touch，online 但 warn 優先）
+		t.Fatalf("warn: %s", b)
+	}
+	_ = st
+}
+
+func TestMetricsRange(t *testing.T) {
+	srv, st := vtServer(t)
+	id, _ := st.EnsureSystemForMachine("mac")
+	for i := 0; i < 3; i++ {
+		st.InsertMetric(id, "1m", store.MetricRow{TS: int64(60 * i), CPU: fpt(float64(i))})
+		st.InsertMetric(id, "10m", store.MetricRow{TS: int64(600 * i), CPU: fpt(float64(100 + i))})
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/systems/"+id+"/metrics?range=12h", nil))
+	b := rec.Body.String()
+	if !strings.Contains(b, `"cpu":100`) || strings.Contains(b, `"cpu":0`) {
+		t.Fatalf("range type: %s", b)
+	}
+	// 未知 system → 404
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/api/systems/nope/metrics?range=1h", nil))
+	if rec2.Code != 404 {
+		t.Fatalf("missing sys: %d", rec2.Code)
+	}
+}
+
+func TestServicesAndVMsAPI(t *testing.T) {
+	srv, st := vtServer(t)
+	id, _ := st.EnsureSystemForMachine("mac")
+	st.ReplaceServices(id, []store.ServiceRow{{Name: "redis", Kind: "docker", Status: "running"}})
+	st.ReplaceVMs(id, []store.VMRow{{Name: "v1", UUID: "u", State: "running"}})
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/services", nil))
+	if !strings.Contains(rec.Body.String(), `"redis"`) {
+		t.Fatalf("services: %s", rec.Body.String())
+	}
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/api/vms", nil))
+	if !strings.Contains(rec2.Body.String(), `"v1"`) {
+		t.Fatalf("vms: %s", rec2.Body.String())
+	}
+}
+
 func postJSON(t *testing.T, srv *Server, path, token, body string) *httptest.ResponseRecorder {
 	r := httptest.NewRequest("POST", path, strings.NewReader(body))
 	if token != "" {

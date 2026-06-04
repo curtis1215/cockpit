@@ -44,17 +44,7 @@ func (s *Server) routes() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}`))
 	})
-	s.mux.HandleFunc("/api/systems", func(w http.ResponseWriter, r *http.Request) {
-		list, err := s.st.ListSystems()
-		if err != nil {
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-		if list == nil {
-			list = []store.System{}
-		}
-		writeJSON(w, 200, list)
-	})
+	s.mux.HandleFunc("/api/systems", s.apiSystemsEnriched)
 	s.registerAgentAPI()
 	s.registerAgentVT()
 	s.registerMonitorAPI()

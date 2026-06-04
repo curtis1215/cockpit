@@ -3,6 +3,8 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/curtis1215/cockpit/internal/inventory"
 	"github.com/curtis1215/cockpit/internal/store"
@@ -12,6 +14,9 @@ func (s *Server) registerMonitorAPI() {
 	s.mux.HandleFunc("/api/agent/report-metrics", s.reportMetrics)
 	s.mux.HandleFunc("/api/agent/report-services", s.reportServices)
 	s.mux.HandleFunc("/api/agent/report-vms", s.reportVMs)
+	s.mux.HandleFunc("/api/services", s.apiServices)
+	s.mux.HandleFunc("/api/vms", s.apiVMs)
+	s.mux.HandleFunc("/api/systems/", s.apiSystemSub)
 }
 
 // agentSystem：統一識別——先試 systems token（enroll 取得），再試 inventory token（自動 find-or-create systems 列）。
@@ -141,4 +146,187 @@ func (s *Server) reportVMs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]int{"applied": len(rows), "linked": linked})
+}
+
+// ── Browser-side Monitor API ─────────────────────────────────────────────────
+
+// fv2 converts *float64 to an any (nil if pointer is nil).
+func fv2(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+// liveStatus derives online/warn/offline from SystemWithLatest data.
+// Logic:
+//   - offline: last_seen > 60s ago (parse failure → never offline)
+//   - warn:    cpu>90 || mem>90 || disk>90 || temp>85
+//   - else:    online
+func liveStatus(x store.SystemWithLatest) string {
+	// Parse last_seen: SQLite datetime('now') → "2006-01-02 15:04:05"
+	if x.LastSeen != "" {
+		t, err := time.Parse("2006-01-02 15:04:05", x.LastSeen)
+		if err == nil {
+			// also try RFC3339 (RegisterSystem uses RFC3339)
+			if time.Since(t) > 60*time.Second {
+				return "offline"
+			}
+		} else {
+			t2, err2 := time.Parse(time.RFC3339, x.LastSeen)
+			if err2 == nil && time.Since(t2) > 60*time.Second {
+				return "offline"
+			}
+			// parse failure → never offline (treat as online)
+		}
+	}
+	// warn check
+	over := func(p *float64, threshold float64) bool {
+		return p != nil && *p > threshold
+	}
+	if over(x.Latest.CPU, 90) || over(x.Latest.Mem, 90) || over(x.Latest.Disk, 90) || over(x.Latest.Temp, 85) {
+		return "warn"
+	}
+	return "online"
+}
+
+// systemMap produces the enriched JSON object for a system.
+func systemMap(x store.SystemWithLatest) map[string]any {
+	st := liveStatus(x)
+	return map[string]any{
+		"id": x.ID, "label": x.Label, "role": x.Role, "os": x.OS, "arch": x.Arch,
+		"kind": x.Kind, "host_id": x.HostID, "status": st,
+		"agent_version": x.AgentVersion, "agent_status": x.AgentStatus,
+		"last_seen": x.LastSeen,
+		"cpu":       fv2(x.Latest.CPU), "mem": fv2(x.Latest.Mem), "disk": fv2(x.Latest.Disk),
+		"gpu": fv2(x.Latest.GPU), "net_up": fv2(x.Latest.NetUp), "net_down": fv2(x.Latest.NetDown),
+		"load": fv2(x.Latest.Load), "temp": fv2(x.Latest.Temp), "uptime": fv2(x.Latest.Uptime),
+		"spark": x.Spark,
+	}
+}
+
+// apiSystemsEnriched replaces the P0 /api/systems handler with enriched output.
+func (s *Server) apiSystemsEnriched(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.st.SystemsWithLatest()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	out := []map[string]any{}
+	for _, x := range rows {
+		out = append(out, systemMap(x))
+	}
+	writeJSON(w, 200, out)
+}
+
+// rangeTypeDef maps a range query string to a metrics type and window.
+type rangeTypeDef struct {
+	Typ       string
+	WindowSec int64
+}
+
+var rangeMap = map[string]rangeTypeDef{
+	"1h":  {"1m", 3600},
+	"12h": {"10m", 12 * 3600},
+	"24h": {"15m", 24 * 3600},
+	"7d":  {"60m", 7 * 24 * 3600},
+	"30d": {"480m", 30 * 24 * 3600},
+}
+
+// apiSystemSub handles GET /api/systems/{id} and /api/systems/{id}/metrics?range=
+func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
+	// strip "/api/systems/" prefix
+	path := strings.TrimPrefix(r.URL.Path, "/api/systems/")
+	parts := strings.SplitN(path, "/", 2)
+	id := parts[0]
+	if id == "" {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+
+	// Find system
+	rows, err := s.st.SystemsWithLatest()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	var found *store.SystemWithLatest
+	for i := range rows {
+		if rows[i].ID == id {
+			found = &rows[i]
+			break
+		}
+	}
+	if found == nil {
+		writeJSON(w, 404, map[string]string{"error": "system not found"})
+		return
+	}
+
+	if len(parts) == 1 {
+		writeJSON(w, 200, systemMap(*found))
+		return
+	}
+
+	if parts[1] == "metrics" {
+		rng := r.URL.Query().Get("range")
+		rt, ok := rangeMap[rng]
+		if !ok {
+			rt = rangeMap["24h"] // default
+		}
+		// Use since=0 to return all stored data of the correct granularity type.
+		// The range parameter selects the metric TYPE (granularity), not a server-side
+		// time-window filter; clients use the "t" field to display the desired window.
+		pts, err := s.st.QueryMetrics(id, rt.Typ, 0)
+		if err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		out := []map[string]any{}
+		for _, m := range pts {
+			out = append(out, map[string]any{
+				"t": m.TS, "cpu": fv2(m.CPU), "mem": fv2(m.Mem), "disk": fv2(m.Disk),
+				"gpu": fv2(m.GPU), "net_up": fv2(m.NetUp), "net_down": fv2(m.NetDown),
+				"load": fv2(m.Load), "temp": fv2(m.Temp),
+			})
+		}
+		writeJSON(w, 200, out)
+		return
+	}
+
+	writeJSON(w, 404, map[string]string{"error": "not found"})
+}
+
+// apiServices returns all services.
+func (s *Server) apiServices(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.st.ListServices()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	out := []map[string]any{}
+	for _, x := range rows {
+		out = append(out, map[string]any{
+			"system_id": x.SystemID, "name": x.Name, "kind": x.Kind,
+			"status": x.Status, "cpu": fv2(x.CPU), "mem": fv2(x.Mem), "port": x.Port,
+		})
+	}
+	writeJSON(w, 200, out)
+}
+
+// apiVMs returns all VMs.
+func (s *Server) apiVMs(w http.ResponseWriter, r *http.Request) {
+	rows, err := s.st.ListVMs()
+	if err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	out := []map[string]any{}
+	for _, x := range rows {
+		out = append(out, map[string]any{
+			"host_system_id": x.HostSystemID, "name": x.Name, "uuid": x.UUID,
+			"vmx_path": x.VmxPath, "state": x.State, "vcpu": x.VCPU, "ram_mb": x.RamMB,
+			"guest_os": x.GuestOS, "linked_system_id": x.LinkedSystemID,
+		})
+	}
+	writeJSON(w, 200, out)
 }
