@@ -61,7 +61,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(405)
 		return
 	}
-	sys, ok := s.bearer(r)
+	sysID, ok := s.agentSystem(r)
 	if !ok {
 		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 		return
@@ -70,7 +70,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		AgentVersion string `json:"agent_version"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	if err := s.st.Heartbeat(sys.AgentToken, body.AgentVersion); err != nil {
+	if err := s.st.HeartbeatByID(sysID, body.AgentVersion); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}

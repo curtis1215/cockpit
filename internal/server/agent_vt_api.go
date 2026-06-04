@@ -18,14 +18,23 @@ func (s *Server) registerAgentVT() {
 	s.mux.HandleFunc("/api/agent/jobs/", s.vtJobSub)
 }
 
-// vtMachine 用 inventory 的 agent_token 解析 Bearer → machine 名（版本 API 認證；P0 systems token 是另一套，P3 收斂）。
+// vtMachine 解析 Bearer token → machine 名。
+// P3 收斂：先試 inventory token；若無，再試 systems token（用 Label 作 machine 名）。
 func (s *Server) vtMachine(r *http.Request) (string, bool) {
 	h := r.Header.Get("Authorization")
 	if !strings.HasPrefix(h, "Bearer ") {
 		return "", false
 	}
-	m := inventory.MachineForToken(s.inv, strings.TrimSpace(h[len("Bearer "):]))
-	return m, m != ""
+	tok := strings.TrimSpace(h[len("Bearer "):])
+	// 1. Try inventory token first
+	if m := inventory.MachineForToken(s.inv, tok); m != "" {
+		return m, true
+	}
+	// 2. Fall back to systems token → use system Label as machine name
+	if sys, err := s.st.SystemByAgentToken(tok); err == nil {
+		return sys.Label, true
+	}
+	return "", false
 }
 
 func (s *Server) vtInstalls(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +109,8 @@ func (s *Server) vtReportVersions(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) vtJobSub(w http.ResponseWriter, r *http.Request) {
-	if _, ok := s.vtMachine(r); !ok {
+	machineName, ok := s.vtMachine(r)
+	if !ok {
 		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
@@ -111,6 +121,16 @@ func (s *Server) vtJobSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parseInt64(parts[0])
+	// Validate job exists and belongs to this machine
+	job, err := s.st.GetJob(id)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	if job.Machine != machineName {
+		writeJSON(w, 403, map[string]string{"error": "job belongs to another machine"})
+		return
+	}
 	switch parts[1] {
 	case "log":
 		var body struct {

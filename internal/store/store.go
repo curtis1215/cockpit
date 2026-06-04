@@ -83,6 +83,15 @@ func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 
 const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,created"
 
+func (s *Store) SystemByID(id string) (System, error) {
+	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE id=?", id)
+	sys, err := scanSystem(row)
+	if err == sql.ErrNoRows {
+		return System{}, ErrNotFound
+	}
+	return sys, err
+}
+
 func (s *Store) SystemByAgentToken(token string) (System, error) {
 	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE agent_token=?", token)
 	sys, err := scanSystem(row)
@@ -97,6 +106,21 @@ func (s *Store) Heartbeat(token, agentVersion string) error {
 	res, err := s.db.Exec(
 		`UPDATE systems SET status='online', agent_status='ok', agent_version=?, last_seen=? WHERE agent_token=?`,
 		agentVersion, now, token)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// HeartbeatByID updates last_seen, status, agent_status, and agent_version for a system by its ID.
+func (s *Store) HeartbeatByID(systemID, agentVersion string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	res, err := s.db.Exec(
+		`UPDATE systems SET status='online', agent_status='ok', agent_version=?, last_seen=? WHERE id=?`,
+		agentVersion, now, systemID)
 	if err != nil {
 		return err
 	}
@@ -261,8 +285,13 @@ func (s *Store) ClaimOldestQueued(machine string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.db.Exec(`UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=?`, id); err != nil {
+	res, err := s.db.Exec(`UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=? AND status='queued'`, id)
+	if err != nil {
 		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Another caller claimed it between SELECT and UPDATE
+		return nil, nil
 	}
 	j, err := s.GetJob(id)
 	return &j, err

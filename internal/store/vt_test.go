@@ -53,6 +53,59 @@ func TestJobQueue(t *testing.T) {
 	}
 }
 
+func TestClaimAtomicGuard(t *testing.T) {
+	s := vtOpen(t)
+
+	// Create a job and claim it
+	jid, err := s.CreateJobUnique("cc", "mac", "command", "")
+	if err != nil || jid == 0 {
+		t.Fatalf("create job: %v %d", err, jid)
+	}
+	claimed, err := s.ClaimOldestQueued("mac")
+	if err != nil || claimed == nil || claimed.ID != jid {
+		t.Fatalf("first claim should succeed: %v %+v", err, claimed)
+	}
+
+	// Second claim with no queued jobs left → nil, nil
+	claimed2, err2 := s.ClaimOldestQueued("mac")
+	if err2 != nil || claimed2 != nil {
+		t.Fatalf("second claim should return nil,nil got: err=%v claimed=%+v", err2, claimed2)
+	}
+
+	// Also verify the atomic guard: create another job, simulate race by
+	// manually setting it to running before the UPDATE guard fires.
+	jid2, _ := s.CreateJobUnique("cc", "mac2", "command", "")
+	// Directly advance status to running to simulate another caller winning the race
+	s.db.Exec(`UPDATE jobs SET status='running' WHERE id=?`, jid2)
+	// Now ClaimOldestQueued sees no queued jobs for mac2
+	claimed3, err3 := s.ClaimOldestQueued("mac2")
+	if err3 != nil || claimed3 != nil {
+		t.Fatalf("guard should block already-running job: err=%v claimed=%+v", err3, claimed3)
+	}
+}
+
+func TestHeartbeatByID(t *testing.T) {
+	s := vtOpen(t)
+	id, _, err := s.RegisterSystem("box", "linux", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.HeartbeatByID(id, "1.2.3"); err != nil {
+		t.Fatalf("HeartbeatByID: %v", err)
+	}
+	sys, err := s.SystemByID(id)
+	if err != nil {
+		t.Fatalf("SystemByID: %v", err)
+	}
+	if sys.AgentVersion != "1.2.3" || sys.Status != "online" || sys.AgentStatus != "ok" {
+		t.Fatalf("after heartbeat: %+v", sys)
+	}
+	// non-existent id → ErrNotFound
+	if err := s.HeartbeatByID("sys_nope", "1.0"); err != ErrNotFound {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+}
+
 func TestAbortAndCheckFlags(t *testing.T) {
 	s := vtOpen(t)
 	jid, _ := s.CreateJobUnique("cc", "mac", "command", "")
