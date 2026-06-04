@@ -2293,9 +2293,9 @@ In `cockpit/inventory.example.yaml`，於每台 machine 加註解示範（不放
 
 ```yaml
 machines:
-  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }   # agent_token: <每機唯一 token，僅放真實 inventory.yaml>
+  mac:        { host: 192.168.1.10, ssh_user: curtis, local: true }   # agent_token: <每機唯一 token，僅放真實 inventory.yaml>
   ubuntu_llm: { host: 100.0.0.0, ssh_user: curtis }                     # agent_token: <...>
-  macmini:    { host: 100.106.177.80, ssh_user: curtis }                # agent_token: <...>
+  macmini:    { host: 192.168.1.10, ssh_user: curtis }                # agent_token: <...>
 ```
 
 - [ ] **Step 5: 更新 docs/deploy.md**

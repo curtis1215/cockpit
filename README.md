@@ -96,7 +96,7 @@ cockpit upgrade
 ```yaml
 machines:
   mac:
-    host: 100.106.177.80
+    host: 192.168.1.10
     ssh_user: curtis
     local: true
 

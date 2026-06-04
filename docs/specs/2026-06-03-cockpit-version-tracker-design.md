@@ -31,7 +31,7 @@
 
 | 地基 | 選擇 | 理由 |
 |---|---|---|
-| 部署主機 | mac mini `100.106.177.80` | 常開、已在 Tailscale、已跑 OrbStack |
+| 部署主機 | mac mini `192.168.1.10` | 常開、已在 Tailscale、已跑 OrbStack |
 | 人的存取面 | **Cloudflare Tunnel + Cloudflare Access** | 任何瀏覽器可上；origin 不開公網 port |
 | └ 信任 IP | Access **Bypass** policy（依來源 IP） | 名單內直接放行、免登入 |
 | └ 名單外 IP | Access **Allow**（Email OTP / Google 登入） | 浮動 IP / 在外也能進，多一道關 |
@@ -77,7 +77,7 @@
 ```yaml
 # inventory.yaml
 machines:
-  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }
+  mac:        { host: 192.168.1.10, ssh_user: curtis, local: true }
   ubuntu_llm: { host: <tailscale-ip>, ssh_user: curtis }
   gcp:        { host: <tailscale-ip>, ssh_user: curtis }
   vps_tokyo:  { host: <tailscale-ip>, ssh_user: root }

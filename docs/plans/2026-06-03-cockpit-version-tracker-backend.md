@@ -1985,9 +1985,9 @@ Create `inventory.example.yaml`:
 
 ```yaml
 machines:
-  mac:        { host: 100.106.177.80, ssh_user: curtis, local: true }
+  mac:        { host: 192.168.1.10, ssh_user: curtis, local: true }
   ubuntu_llm: { host: 100.0.0.0, ssh_user: curtis }
-  macmini:    { host: 100.106.177.80, ssh_user: curtis }
+  macmini:    { host: 192.168.1.10, ssh_user: curtis }
 
 software:
   - name: claude-code

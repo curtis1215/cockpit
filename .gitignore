@@ -22,3 +22,8 @@ dist/
 
 # OS
 .DS_Store
+
+cockpit.db
+*.db
+dist/
+*.egg-info/
