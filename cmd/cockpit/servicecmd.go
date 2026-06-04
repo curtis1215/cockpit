@@ -64,13 +64,14 @@ func runService(args []string) {
 
 	mode := fs.String("mode", "", "serve or agent (required)")
 	cfgPath := fs.String("config", "", "path to config JSON (required for install)")
-	fs.Parse(args)
-
-	if fs.NArg() < 1 {
+	// 形式為 `cockpit service <action> -flags…`：flag 套件遇到第一個非 flag 參數即停止解析，
+	// 因此先取出 action 再 parse 其餘參數。
+	if len(args) < 1 || len(args[0]) == 0 || args[0][0] == '-' {
 		fs.Usage()
 		os.Exit(2)
 	}
-	action := fs.Arg(0)
+	action := args[0]
+	fs.Parse(args[1:])
 
 	validActions := map[string]bool{
 		"install": true, "uninstall": true,
