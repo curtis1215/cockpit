@@ -337,6 +337,8 @@ func (s *Server) createSoftwareInstall(w http.ResponseWriter, r *http.Request) {
 	if s.onCheck != nil {
 		go s.onCheck()
 	}
+	// 立刻通知該機 agent 重報版本（long-poll 會在 ~0.5s 內收到 check）。
+	s.st.SetCheckRequested(body.Machine)
 
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

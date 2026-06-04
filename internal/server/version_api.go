@@ -138,8 +138,14 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if s.onCheck != nil {
 		go s.onCheck()
 	}
+	// inventory 機器與所有 DB systems（label）都設旗標——enrolled 機器不一定在 inventory.machines。
 	for name := range inv.Machines {
 		s.st.SetCheckRequested(name)
+	}
+	if systems, err := s.st.ListSystems(); err == nil {
+		for _, sys := range systems {
+			s.st.SetCheckRequested(sys.Label)
+		}
 	}
 	writeJSON(w, 200, map[string]bool{"started": true})
 }
