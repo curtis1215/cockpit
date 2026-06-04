@@ -114,7 +114,7 @@
       ? `<div class="m-foot"><span class="badge b-mut">等待連線</span><span>尚未回報</span>${agentBadge}</div>`
       : offline
       ? `<div class="m-foot"><span class="badge b-err">離線</span><span>最後回報 ${m.last_seen}</span>${agentBadge}</div>`
-      : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span><span>${svcCount} 服務</span><span>·</span><span>${m.temp}°C</span></div>`;
+      : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span><span>${svcCount} 服務</span>${m.temp!=null?`<span>·</span><span>${m.temp}°C</span>`:""}</div>`;
     return `<div class="node m-node" data-node="m:${id}" data-machine="${id}" data-health="${h}">
       <div class="node-l" style="background:var(--${lcol});"></div>
       <div class="m-top">
@@ -359,7 +359,7 @@
         ${gauge("CPU", m.cpu)}${gauge("記憶體", m.mem)}${gauge("磁碟", m.disk)}${m.gpu!=null?gauge("GPU", m.gpu):kv("負載", m.load.join(" / "))}
       </div>
       <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
-        ${chip("網路 ↑", m.net.up+" MB/s")}${chip("網路 ↓", m.net.down+" MB/s")}${chip("溫度", m.temp+"°C")}${chip("運行時間", m.uptime)}${chip("負載", m.load.join("/"))}
+        ${chip("網路 ↑", m.net.up+" MB/s")}${chip("網路 ↓", m.net.down+" MB/s")}${m.temp!=null?chip("溫度", m.temp+"°C"):""}${chip("運行時間", m.uptime)}${chip("負載", m.load.join("/"))}
       </div>`;
     const agentLine = m.agent_status === "behind"
       ? `<span class="badge b-warn">agent ${m.agent} · 有新版</span>`

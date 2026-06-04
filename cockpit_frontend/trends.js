@@ -109,7 +109,7 @@
       <div style="display:flex;align-items:center;gap:8px;margin-top:7px;flex-wrap:wrap;font-size:12.5px;color:var(--text-2);">
         <span>${m.role}</span><span style="color:var(--text-3);">·</span>
         <span class="tag">${m.os}</span><span class="tag">${m.arch}</span>
-        ${h==="online"||h==="warn"?`<span style="color:var(--text-3);">·</span><span>運行 ${m.uptime}</span><span style="color:var(--text-3);">·</span><span>${m.temp}°C</span>`:h==="pending"?`<span style="color:var(--accent);">· 等待 agent 連線</span>`:`<span style="color:var(--err);">· 離線 · 最後回報 ${m.last_seen}</span>`}
+        ${h==="online"||h==="warn"?`<span style="color:var(--text-3);">·</span><span>運行 ${m.uptime}</span>${m.temp!=null?`<span style="color:var(--text-3);">·</span><span>${m.temp}°C</span>`:""}`:h==="pending"?`<span style="color:var(--accent);">· 等待 agent 連線</span>`:`<span style="color:var(--err);">· 離線 · 最後回報 ${m.last_seen}</span>`}
         ${agentBadge}
       </div>${warn}`;
   }
@@ -130,7 +130,7 @@
     ];
     if (m.gpu != null) cards.push(statCard("GPU", m.gpu + "%", null, barColor(m.gpu)));
     cards.push(statCard("網路", `↑${m.net.up}`, `↓${m.net.down} MB/s`, "var(--text)"));
-    cards.push(statCard("溫度", m.temp + "°C", null, m.temp >= 70 ? "var(--err)" : m.temp >= 55 ? "var(--warn)" : "var(--ok)"));
+    if (m.temp != null) cards.push(statCard("溫度", m.temp + "°C", null, m.temp >= 70 ? "var(--err)" : m.temp >= 55 ? "var(--warn)" : "var(--ok)"));
     $("#stat-cards").innerHTML = cards.join("");
   }
 
@@ -152,6 +152,10 @@
     const grid = $("#charts");
     if (m.status === "offline") { grid.innerHTML = ""; return; }
     const defs = CHART_DEFS.filter((d) => series(state.machine, d.metrics[0], state.range));
+    if (!defs.length) {
+      grid.innerHTML = `<div style="grid-column:1/-1;padding:48px 20px;text-align:center;color:var(--text-3);font-size:13px;">此區間尚無資料，稍後自動更新</div>`;
+      return;
+    }
     grid.innerHTML = defs.map((d, idx) => {
       const primary = series(state.machine, d.metrics[0], state.range);
       const legend = d.legend
