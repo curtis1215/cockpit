@@ -286,3 +286,9 @@ func (s *Store) PruneMetrics(now int64) error {
 	}
 	return nil
 }
+
+// TouchSystem updates last_seen and sets status=online for a system.
+func (s *Store) TouchSystem(id string) error {
+	_, err := s.db.Exec(`UPDATE systems SET last_seen=datetime('now'), status='online' WHERE id=?`, id)
+	return err
+}

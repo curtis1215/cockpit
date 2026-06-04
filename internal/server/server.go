@@ -57,6 +57,7 @@ func (s *Server) routes() {
 	})
 	s.registerAgentAPI()
 	s.registerAgentVT()
+	s.registerMonitorAPI()
 	s.registerVersionAPI()
 	s.registerSSE()
 	sub, _ := fs.Sub(rootpkg.Frontend, "cockpit_frontend")
