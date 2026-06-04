@@ -210,7 +210,7 @@
     // x 軸時間標籤（~4 個）
     const labelCount = Math.min(4, n);
     for (let l = 0; l < labelCount; l++) {
-      const i = Math.round((l / (labelCount - 1)) * (n - 1));
+      const i = labelCount === 1 ? 0 : Math.round((l / (labelCount - 1)) * (n - 1)); // n=1 時避免 0/0→NaN
       const x = X(i);
       const anchor = l === 0 ? "start" : l === labelCount - 1 ? "end" : "middle";
       svgInner += `<text x="${x}" y="${H - 6}" fill="var(--text-3)" font-size="10" font-family="JetBrains Mono,monospace" text-anchor="${anchor}">${seriesList[0].times[i]}</text>`;
