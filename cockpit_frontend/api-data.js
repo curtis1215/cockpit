@@ -103,7 +103,8 @@
   /** series(machineId, metric, range) — 同步（cache 預先填充） */
   function series(machineId, metric, range) {
     const rows = _cache[range];
-    if (!rows || !rows.length) return null;
+    // 守門：cache 不存在 / 非陣列 / 空陣列 → null（讓空狀態提示觸發）
+    if (!Array.isArray(rows) || rows.length === 0) return null;
 
     // API metric 欄位名稱映射
     const fieldMap = {
@@ -113,8 +114,8 @@
     const field = fieldMap[metric] || metric;
 
     const points = rows.map((r) => r[field]);
-    // 若全 null 回傳 null
-    if (points.every((v) => v == null)) return null;
+    // 守門：points 長度為 0、或該 metric 全 null → null
+    if (points.length === 0 || points.every((v) => v == null)) return null;
 
     // 以 null → 0 補缺值（圖表 filter(Boolean) 已有保護）
     const pts = points.map((v) => (v == null ? 0 : Number(v)));
