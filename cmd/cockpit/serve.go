@@ -53,6 +53,19 @@ func runServe(args []string) {
 		}()
 	}
 
+	go func() {
+		for {
+			time.Sleep(5 * time.Minute)
+			now := time.Now().Unix()
+			if err := st.Downsample(now); err != nil {
+				log.Printf("downsample: %v", err)
+			}
+			if err := st.PruneMetrics(now); err != nil {
+				log.Printf("prune: %v", err)
+			}
+		}
+	}()
+
 	log.Printf("cockpit serve on http://%s", cfg.Listen)
 	if err := http.ListenAndServe(cfg.Listen, srv.Handler()); err != nil {
 		log.Fatal(err)

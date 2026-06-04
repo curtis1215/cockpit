@@ -9,9 +9,12 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/curtis1215/cockpit/internal/collect"
+	"github.com/curtis1215/cockpit/internal/dockerstat"
 	"github.com/curtis1215/cockpit/internal/executor"
 	"github.com/curtis1215/cockpit/internal/httpx"
 	"github.com/curtis1215/cockpit/internal/version"
+	"github.com/curtis1215/cockpit/internal/vmenum"
 )
 
 type Agent struct {
@@ -22,6 +25,9 @@ type Agent struct {
 	HeartbeatSec int
 	SaveToken    func(string) error
 	client       *httpx.Client
+	col          *collect.Collector
+	docker       *dockerstat.Collector
+	vmenum       *vmenum.Enumerator
 }
 
 func (a *Agent) c() *httpx.Client {
@@ -115,6 +121,7 @@ func (a *Agent) Run() error {
 			time.Sleep(time.Duration(interval) * time.Second)
 		}
 	}()
+	go a.monitorLoop()
 	a.ReportVersions(60 * time.Second)
 	for {
 		evt, job, err := a.pollOnce(25)
