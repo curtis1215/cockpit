@@ -19,10 +19,11 @@ func (s *Server) registerVersionAPI() {
 }
 
 func (s *Server) handleInstalls(w http.ResponseWriter, r *http.Request) {
+	inv := s.getInv()
 	latest := s.st.LatestVersionMap()
 	kindOf := map[string]string{}
 	updKind := map[string]string{}
-	for _, sw := range s.inv.Software {
+	for _, sw := range inv.Software {
 		kindOf[sw.Name] = sw.Kind
 		for _, ins := range sw.Installs {
 			updKind[sw.Name+"::"+ins.Machine] = ins.Update.Type
@@ -95,7 +96,7 @@ func (s *Server) handleInstallSub(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
 		return
 	}
-	jid, err := jobs.StartJob(s.st, s.inv, parts[0], parts[1])
+	jid, err := jobs.StartJob(s.st, s.getInv(), parts[0], parts[1])
 	if err == jobs.ErrActiveJobExists {
 		writeJSON(w, 409, map[string]string{"error": "update already in progress"})
 		return
@@ -133,10 +134,11 @@ func (s *Server) handleJobSub(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
+	inv := s.getInv()
 	if s.onCheck != nil {
 		go s.onCheck()
 	}
-	for name := range s.inv.Machines {
+	for name := range inv.Machines {
 		s.st.SetCheckRequested(name)
 	}
 	writeJSON(w, 200, map[string]bool{"started": true})

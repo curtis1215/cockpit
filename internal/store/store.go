@@ -433,6 +433,12 @@ func (s *Store) ListInstalls() ([]Install, error) {
 	return out, rows.Err()
 }
 
+// DeleteInstall removes an install row for (software,machine).
+func (s *Store) DeleteInstall(software, machine string) error {
+	_, err := s.db.Exec(`DELETE FROM installs WHERE software=? AND machine=?`, software, machine)
+	return err
+}
+
 // CreateJobUnique creates a job only if no queued/running job exists for (software,machine).
 // Returns the new job ID, or 0 if a duplicate exists.
 func (s *Store) CreateJobUnique(software, machine, kind, runner string) (int64, error) {

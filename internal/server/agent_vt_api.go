@@ -27,7 +27,7 @@ func (s *Server) vtMachine(r *http.Request) (string, bool) {
 	}
 	tok := strings.TrimSpace(h[len("Bearer "):])
 	// 1. Try inventory token first
-	if m := inventory.MachineForToken(s.inv, tok); m != "" {
+	if m := inventory.MachineForToken(s.getInv(), tok); m != "" {
 		return m, true
 	}
 	// 2. Fall back to systems token → use system Label as machine name
@@ -43,8 +43,9 @@ func (s *Server) vtInstalls(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 401, map[string]string{"error": "unauthorized"})
 		return
 	}
+	inv := s.getInv()
 	out := []map[string]any{}
-	for _, sw := range s.inv.Software {
+	for _, sw := range inv.Software {
 		for _, ins := range sw.Installs {
 			if ins.Machine == machine {
 				out = append(out, map[string]any{"software": sw.Name, "current_cmd": ins.CurrentCmd, "version_regex": nilIfEmpty(ins.VersionRegex)})
@@ -71,7 +72,7 @@ func (s *Server) vtPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
 	for {
-		claimed, _ := jobs.ClaimNextJob(s.st, s.inv, machine)
+		claimed, _ := jobs.ClaimNextJob(s.st, s.getInv(), machine)
 		if claimed != nil {
 			writeJSON(w, 200, map[string]any{"type": "job", "job": map[string]any{
 				"id": claimed.ID, "software": claimed.Software, "machine": claimed.Machine,

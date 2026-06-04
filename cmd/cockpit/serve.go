@@ -36,6 +36,7 @@ func runServe(args []string) {
 		}
 	}
 	srv := server.NewWithInventory(st, cfg.EnrollSecret, inv)
+	srv.SetInventoryPath(cfg.InventoryPath)
 
 	tr := translate.New()
 	refresh := func() { collector.RefreshUpstream(st, inv, collector.DefaultFetch, tr.Changelog) }

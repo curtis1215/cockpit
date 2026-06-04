@@ -132,3 +132,80 @@ func MachineForToken(inv Inventory, token string) string {
 	}
 	return ""
 }
+
+// Marshal serialises inv to YAML bytes that can be loaded back by LoadText.
+func Marshal(inv Inventory) ([]byte, error) {
+	// Build raw machines map.
+	rawMachines := map[string]map[string]any{}
+	for name, m := range inv.Machines {
+		entry := map[string]any{
+			"host":     m.Host,
+			"ssh_user": m.SSHUser,
+		}
+		if m.Local {
+			entry["local"] = true
+		}
+		if m.AgentToken != "" {
+			entry["agent_token"] = m.AgentToken
+		}
+		rawMachines[name] = entry
+	}
+
+	// Build raw software list.
+	type rawInstall struct {
+		Machine      string         `yaml:"machine"`
+		CurrentCmd   string         `yaml:"current_cmd"`
+		VersionRegex string         `yaml:"version_regex,omitempty"`
+		Update       map[string]any `yaml:"update"`
+	}
+	type rawSoftware struct {
+		Name         string       `yaml:"name"`
+		Kind         string       `yaml:"kind"`
+		LatestSource string       `yaml:"latest_source"`
+		Changelog    string       `yaml:"changelog,omitempty"`
+		Installs     []rawInstall `yaml:"installs"`
+	}
+
+	rawSWList := []rawSoftware{}
+	for _, sw := range inv.Software {
+		var insts []rawInstall
+		for _, inst := range sw.Installs {
+			upMap := map[string]any{"type": inst.Update.Type}
+			switch inst.Update.Type {
+			case "command":
+				upMap["cmd"] = inst.Update.Cmd
+			case "agent":
+				upMap["runner"] = inst.Update.Runner
+				upMap["prompt"] = inst.Update.Prompt
+				if inst.Update.Machine != "" {
+					upMap["machine"] = inst.Update.Machine
+				}
+				if inst.Update.Cwd != "" {
+					upMap["cwd"] = inst.Update.Cwd
+				}
+				if inst.Update.Invoke != "" {
+					upMap["invoke"] = inst.Update.Invoke
+				}
+			}
+			insts = append(insts, rawInstall{
+				Machine:      inst.Machine,
+				CurrentCmd:   inst.CurrentCmd,
+				VersionRegex: inst.VersionRegex,
+				Update:       upMap,
+			})
+		}
+		rawSWList = append(rawSWList, rawSoftware{
+			Name:         sw.Name,
+			Kind:         sw.Kind,
+			LatestSource: sw.LatestSource,
+			Changelog:    sw.Changelog,
+			Installs:     insts,
+		})
+	}
+
+	doc := map[string]any{
+		"machines": rawMachines,
+		"software": rawSWList,
+	}
+	return yaml.Marshal(doc)
+}

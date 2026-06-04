@@ -1,6 +1,9 @@
 package inventory
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 const inv = `
 machines:
@@ -58,5 +61,47 @@ software:
 `
 	if _, err := LoadText([]byte(bad2)); err == nil {
 		t.Fatal("want error for unknown machine ref")
+	}
+}
+
+// TestMarshalRoundTrip verifies Marshal → LoadText produces an identical Inventory.
+func TestMarshalRoundTrip(t *testing.T) {
+	// Fixture covers: command + agent update types, version_regex, agent_token, changelog.
+	const fixture = `
+machines:
+  mac:  { host: 1.2.3.4, ssh_user: curtis, local: true, agent_token: tok-mac }
+  box:  { host: 5.6.7.8, ssh_user: root }
+software:
+  - name: cc
+    kind: npm
+    latest_source: "npm:cc"
+    installs:
+      - machine: mac
+        current_cmd: "cc --version"
+        version_regex: "v(\\d+\\.\\d+)"
+        update: { type: command, cmd: "npm i -g cc@latest" }
+  - name: multica
+    kind: custom
+    latest_source: "github:o/multica"
+    changelog: "github:o/multica"
+    installs:
+      - machine: box
+        current_cmd: "docker inspect multica --format version"
+        update: { type: agent, runner: codex_exec, prompt: "update to latest", cwd: /srv/multica }
+`
+	orig, err := LoadText([]byte(fixture))
+	if err != nil {
+		t.Fatalf("load orig: %v", err)
+	}
+	b, err := Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, err := LoadText(b)
+	if err != nil {
+		t.Fatalf("load marshaled: %v", err)
+	}
+	if !reflect.DeepEqual(orig, got) {
+		t.Fatalf("round-trip mismatch\norig: %+v\ngot:  %+v", orig, got)
 	}
 }
