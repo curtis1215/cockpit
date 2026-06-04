@@ -59,11 +59,32 @@ func randHex(n int) string {
 }
 
 // RegisterSystem 建立一筆 online system 並回傳 (id, agent_token)。
+// RegisterSystem upserts a system by label. If the label already exists (e.g. an
+// agent that lost its token re-enrolling under the same hostname), the existing row
+// is reused and its agent_token is rotated (old token invalidated); the existing id
+// and a fresh token are returned. A new label inserts a fresh row.
 func (s *Store) RegisterSystem(label, osName, arch string) (string, string, error) {
-	id := "sys_" + randHex(6)
-	token := "ck_agent_" + randHex(20)
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(
+	token := "ck_agent_" + randHex(20)
+
+	// Re-enroll path: label exists → rotate token on existing row.
+	var existingID string
+	err := s.db.QueryRow(`SELECT id FROM systems WHERE label=?`, label).Scan(&existingID)
+	if err == nil {
+		if _, err := s.db.Exec(
+			`UPDATE systems SET agent_token=?, os=?, arch=?, status='online', agent_status='ok', last_seen=? WHERE id=?`,
+			token, osName, arch, now, existingID); err != nil {
+			return "", "", err
+		}
+		return existingID, token, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", "", err
+	}
+
+	// New label → insert fresh row.
+	id := "sys_" + randHex(6)
+	_, err = s.db.Exec(
 		`INSERT INTO systems (id,label,os,arch,kind,status,agent_status,last_seen,agent_token,created)
 		 VALUES (?,?,?,?, 'physical','online','ok',?,?,?)`,
 		id, label, osName, arch, now, token, time.Now().Unix())
