@@ -87,12 +87,82 @@
   });
 
   /* ============================================================
+     摺疊狀態（localStorage 持久化）
+     ============================================================ */
+  const COLLAPSED_KEY = "cockpit-topo-collapsed";
+  const collapsedMachines = new Set(
+    JSON.parse(localStorage.getItem(COLLAPSED_KEY) || "[]")
+  );
+
+  function saveCollapsed() {
+    localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...collapsedMachines]));
+  }
+
+  /** 某個軟體節點是否應該隱藏：
+   *  所有連到它的服務，所屬機器全部都已收起，才隱藏。
+   *  若有任何一台展開的機器的服務連到它，就保持可見。
+   */
+  function softwareShouldHide(installId) {
+    const ownerSvcs = services.filter((s) => s.software.includes(installId));
+    if (ownerSvcs.length === 0) return false; // 無連線軟體不隱藏
+    return ownerSvcs.every((s) => collapsedMachines.has(s.machine));
+  }
+
+  /** 套用摺疊可見性（renderAll 後呼叫）*/
+  function applyCollapse() {
+    // 服務節點
+    document.querySelectorAll(".s-node").forEach((el) => {
+      const machine = el.dataset.machine;
+      el.style.display = collapsedMachines.has(machine) ? "none" : "";
+    });
+    // 軟體節點
+    document.querySelectorAll(".w-node").forEach((el) => {
+      const key = el.dataset.node; // "w:installId"
+      const installId = key.slice(2);
+      el.style.display = softwareShouldHide(installId) ? "none" : "";
+    });
+    // 更新每張機器卡的收起摘要行
+    document.querySelectorAll(".m-node").forEach((el) => {
+      const id = el.dataset.machine;
+      const summary = el.querySelector(".m-collapse-summary");
+      const collapsed = collapsedMachines.has(id);
+      if (summary) {
+        summary.style.display = collapsed ? "" : "none";
+      }
+      // 切換按鈕圖示
+      const btn = el.querySelector(".m-collapse-btn");
+      if (btn) {
+        btn.textContent = collapsed ? "＋" : "−";
+        btn.title = collapsed ? "展開" : "收起";
+      }
+    });
+  }
+
+  /** 切換收起/展開，並重繪邊 */
+  function toggleCollapse(machineId) {
+    if (collapsedMachines.has(machineId)) {
+      collapsedMachines.delete(machineId);
+    } else {
+      collapsedMachines.add(machineId);
+    }
+    saveCollapsed();
+    applyCollapse();
+    drawEdges();
+  }
+
+  /* ============================================================
      render 節點
      ============================================================ */
   function machineNode(id) {
     const m = MACHINE_META[id];
     const h = machineHealth(id);
     const svcCount = services.filter((s) => s.machine === id).length;
+    // 連到此機器服務的軟體數（去重）
+    const swIds = new Set(
+      services.filter((s) => s.machine === id).flatMap((s) => s.software)
+    );
+    const swCount = swIds.size;
+    const collapsed = collapsedMachines.has(id);
     const offline = h === "offline" || h === "pending";
     const lcol = h === "offline" ? "err" : h === "warn" ? "warn" : h === "pending" ? "accent" : "ok";
     const metrics = offline ? "" : ["CPU", "MEM", "DISK"].map((lbl, i) => {
@@ -115,6 +185,8 @@
       : offline
       ? `<div class="m-foot"><span class="badge b-err">離線</span><span>最後回報 ${m.last_seen}</span>${agentBadge}</div>`
       : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span><span>${svcCount} 服務</span>${m.temp!=null?`<span>·</span><span>${m.temp}°C</span>`:""}</div>`;
+    // 摘要行（收起時顯示）
+    const summaryLine = `<div class="m-collapse-summary" style="display:${collapsed ? "" : "none"}; margin-top:7px; padding-top:7px; border-top:1px solid var(--border); font-size:11px; color:var(--text-3);">${svcCount} 服務 · ${swCount} 軟體（已收起）</div>`;
     return `<div class="node m-node" data-node="m:${id}" data-machine="${id}" data-health="${h}">
       <div class="node-l" style="background:var(--${lcol});"></div>
       <div class="m-top">
@@ -122,9 +194,14 @@
           <div style="display:flex; align-items:center; gap:7px;"><span class="sdot ${HCLS[h]} ${h!=="online"?"pulse":""}"></span><span class="m-name">${m.label}</span></div>
           <div class="m-role">${id} · ${m.role}</div>
         </div>
-        <span class="tag" style="margin-top:2px;">${m.arch}</span>
+        <div style="display:flex; align-items:flex-start; gap:6px; flex:none;">
+          <span class="tag" style="margin-top:2px;">${m.arch}</span>
+          <button class="m-collapse-btn" data-collapse-machine="${id}" title="${collapsed ? "展開" : "收起"}"
+            style="font-size:12px; font-weight:700; line-height:1; padding:1px 5px; border-radius:5px; border:1px solid var(--border-2); background:var(--surface-2); color:var(--text-3); cursor:pointer; transition:.14s; flex:none;"
+            >${collapsed ? "＋" : "−"}</button>
+        </div>
       </div>
-      ${metrics}${gpu}${foot}
+      ${metrics}${gpu}${foot}${summaryLine}
     </div>`;
   }
 
@@ -183,6 +260,7 @@
     $("#c-service").textContent = services.length;
     $("#c-software").textContent = software.length;
     applyGrouping();
+    applyCollapse();
   }
 
   // 機器分群：同機器節點間留白成帶狀
@@ -293,6 +371,13 @@
   });
   topo.addEventListener("mouseout", (e) => { if (e.target.closest(".node") && !pinned) clearHighlight(); });
   topo.addEventListener("click", (e) => {
+    // 收起/展開按鈕：阻止冒泡，不開詳情
+    const colBtn = e.target.closest("[data-collapse-machine]");
+    if (colBtn) {
+      e.stopPropagation();
+      toggleCollapse(colBtn.dataset.collapseMachine);
+      return;
+    }
     const n = e.target.closest(".node"); if (!n) return;
     pinned = n.dataset.node;
     topo.querySelectorAll(".node").forEach((x) => x.classList.toggle("pinned", x === n));
