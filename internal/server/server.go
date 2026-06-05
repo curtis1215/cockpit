@@ -40,6 +40,9 @@ func (s *Server) SetInventoryPath(p string) {
 }
 
 // getInv returns a snapshot of the current inventory under RLock.
+// Inventory 回傳當前（熱載後）的 inventory 快照，供外部（serve 的 refresh 排程）使用。
+func (s *Server) Inventory() inventory.Inventory { return s.getInv() }
+
 func (s *Server) getInv() inventory.Inventory {
 	s.invMu.RLock()
 	defer s.invMu.RUnlock()
