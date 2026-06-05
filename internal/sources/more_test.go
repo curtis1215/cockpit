@@ -2,6 +2,7 @@ package sources
 
 import (
 	"net/http"
+	"runtime"
 	"testing"
 
 	"github.com/curtis1215/cockpit/internal/inventory"
@@ -24,6 +25,9 @@ func TestBrew(t *testing.T) {
 	}
 }
 func TestCustom(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
 	res, err := fetchCustom(inventory.Software{Name: "x", LatestSource: "custom:echo 9.9.9"}, "echo 9.9.9")
 	if err != nil || res.Version != "9.9.9" {
 		t.Fatalf("custom: %+v %v", res, err)

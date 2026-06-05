@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +14,9 @@ import (
 )
 
 func TestRunJobCommandFlow(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
 	var mu sync.Mutex
 	logs := []string{}
 	var result map[string]any
@@ -49,6 +53,9 @@ func TestRunJobCommandFlow(t *testing.T) {
 }
 
 func TestRunJobAbort(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
 	var result map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

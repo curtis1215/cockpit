@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -26,6 +27,9 @@ type errBoom struct{}
 func (errBoom) Error() string { return "boom" }
 
 func TestNewWithCmdStdin(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
 	tr := NewWithCmd("cat") // bash -lc cat：原樣回吐 stdin
 	out := tr.Changelog("hello-raw")
 	if out == "" || !strings.Contains(out, "hello-raw") || !strings.Contains(out, "技術翻譯") {

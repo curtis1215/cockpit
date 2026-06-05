@@ -2,12 +2,16 @@ package supervisor
 
 import (
 	"context"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestSuperviseRestarts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
 	var starts int32
 	ctx, cancel := context.WithCancel(context.Background())
 	// 用一個會立刻結束的指令；supervisor 應重啟它幾次

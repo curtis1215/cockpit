@@ -1,0 +1,72 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request: {}
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  smoke:
+    needs: test
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        run: go build -o cockpit ./cmd/cockpit
+
+      - name: Version check
+        run: ./cockpit version
+
+      - name: Setup serve config
+        run: ./cockpit setup serve -dir ./tmpc -data ./tmpd -listen 127.0.0.1:18787 -no-service
+
+      - name: Start serve in background
+        run: ./cockpit serve -config ./tmpc/serve.json &
+
+      - name: Poll health endpoint
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fs http://127.0.0.1:18787/api/health; then
+              echo ""
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "health check failed after 10 retries"
+          exit 1
+
+      - name: Assert health response
+        run: |
+          RESP=$(curl -fs http://127.0.0.1:18787/api/health)
+          echo "response: $RESP"
+          echo "$RESP" | grep -q '"ok":true'
+
+      - name: Service e2e (ubuntu only)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo ./cockpit service install -mode serve -config $PWD/tmpc/serve.json
+          sudo ./cockpit service start -mode serve
+          sleep 2
+          systemctl is-active cockpit-serve
+          sudo ./cockpit service stop -mode serve
+          sudo ./cockpit service uninstall -mode serve
