@@ -101,5 +101,19 @@ func (s *Server) routes() {
 	s.registerManageAPI()
 	s.registerSSE()
 	sub, _ := fs.Sub(rootpkg.Frontend, "cockpit_frontend")
-	s.mux.Handle("/", http.FileServer(http.FS(sub)))
+	static := http.FileServer(http.FS(sub))
+	// 以 server 版本當 ETag：升級後快取立即失效；未升級時回 304。
+	// 沒有這層，瀏覽器/CDN 會啟發式快取 .js/.css，發版後 UI 卡舊版。
+	s.mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		etag := `"` + s.version + `"`
+		if s.version != "" && r.Header.Get("If-None-Match") == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		if s.version != "" {
+			w.Header().Set("ETag", etag)
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		static.ServeHTTP(w, r)
+	}))
 }
