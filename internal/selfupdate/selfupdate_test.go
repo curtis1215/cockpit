@@ -133,8 +133,10 @@ func TestRun_Upgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat target: %v", err)
 	}
-	if info.Mode()&0111 == 0 {
-		t.Errorf("new binary is not executable, mode=%v", info.Mode())
+	if runtime.GOOS != "windows" { // Windows 無 unix 執行位
+		if info.Mode()&0111 == 0 {
+			t.Errorf("new binary is not executable, mode=%v", info.Mode())
+		}
 	}
 
 	// .old file should be removed.
