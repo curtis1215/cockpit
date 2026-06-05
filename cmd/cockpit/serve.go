@@ -51,6 +51,16 @@ func runServe(args []string) {
 		go func() {
 			for {
 				refresh()
+				// 通知所有 agent 重新回報版本（與 handleCheck 相同邏輯）
+				inv2 := srv.Inventory()
+				for name := range inv2.Machines {
+					st.SetCheckRequested(name)
+				}
+				if systems, err := st.ListSystems(); err == nil {
+					for _, sys := range systems {
+						st.SetCheckRequested(sys.Label)
+					}
+				}
 				time.Sleep(time.Duration(hours) * time.Hour)
 			}
 		}()
