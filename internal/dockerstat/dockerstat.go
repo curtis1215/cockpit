@@ -37,14 +37,24 @@ func execDocker(args ...string) (string, error) {
 }
 
 // Collect returns the list of running docker services.
-// Returns nil (not empty slice) when docker is not available at all.
+//
+// Nil vs empty contract:
+//   - nil  → docker command failed (not installed, daemon down, etc.); caller
+//             should NOT report to the server, because we have no ground truth.
+//   - []Service{} (non-nil, len==0) → docker is healthy, zero containers are
+//             running; caller SHOULD POST the empty list so the server can clear
+//             any stale rows from a previous state.
 func (c *Collector) Collect() []Service {
 	psOut, err := c.Run("ps", "--format", `{{json .}}`)
 	if err != nil {
 		return nil
 	}
 	statsOut, _ := c.Run("stats", "--no-stream", "--format", `{{json .}}`)
-	return parse(psOut, statsOut)
+	svcs := parse(psOut, statsOut)
+	if svcs == nil {
+		svcs = []Service{} // ps succeeded → always non-nil, even when empty
+	}
+	return svcs
 }
 
 type psRow struct {

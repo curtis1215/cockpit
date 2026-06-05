@@ -31,12 +31,16 @@ func (a *Agent) MonitorOnce() {
 
 // ServicesOnce collects Docker/container services and reports to the server.
 // Safe to call when Docker is not running — returns silently in that case.
+//
+// nil return from Collect means docker is unavailable → skip POST (no ground truth).
+// non-nil (including empty slice) means docker is healthy → always POST so the
+// server can clear stale rows when zero containers are running.
 func (a *Agent) ServicesOnce() {
 	if a.docker == nil {
 		a.docker = dockerstat.New()
 	}
 	svcs := a.docker.Collect()
-	if len(svcs) == 0 {
+	if svcs == nil {
 		return
 	}
 	a.c().PostJSON("/api/agent/report-services", a.Token, svcs, nil)

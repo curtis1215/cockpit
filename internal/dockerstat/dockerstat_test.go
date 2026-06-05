@@ -26,7 +26,25 @@ func TestParse(t *testing.T) {
 func TestCollectNoDocker(t *testing.T) {
 	c := &Collector{Run: func(args ...string) (string, error) { return "", errNo{} }}
 	if svcs := c.Collect(); svcs != nil {
-		t.Fatalf("no docker → nil, got %+v", svcs)
+		t.Fatalf("ps error → nil, got %+v", svcs)
+	}
+}
+
+// TestCollectEmptyPS: docker ps succeeds but returns no containers.
+// Collect must return a non-nil empty slice so the caller can POST and clear
+// stale server rows.
+func TestCollectEmptyPS(t *testing.T) {
+	calls := 0
+	c := &Collector{Run: func(args ...string) (string, error) {
+		calls++
+		return "", nil // ps succeeds with empty output; stats also empty
+	}}
+	svcs := c.Collect()
+	if svcs == nil {
+		t.Fatal("ps success with empty output → must return non-nil slice, got nil")
+	}
+	if len(svcs) != 0 {
+		t.Fatalf("expected empty slice, got %+v", svcs)
 	}
 }
 
