@@ -148,7 +148,15 @@
   // 簡單判斷：含 "machine" 字串就走機器頁
   const IS_MACHINE = /machine/i.test(location.pathname);
 
-  async function loadAll() {
+  
+  async function fillVersion() {
+    try {
+      const v = await api("/api/version");
+      const el = document.getElementById("server-ver");
+      if (el && v && v.version) el.textContent = "v" + v.version;
+    } catch (_) {}
+  }
+async function loadAll() {
     /* 1. 共用資料 */
     const [systems, services, vms, installs] = await Promise.all([
       api("/api/systems"),
@@ -357,6 +365,7 @@
 
   try {
     await loadAll();
+      fillVersion();
   } catch (err) {
     console.error("[api-data] loadAll failed:", err);
     showLoadError();
