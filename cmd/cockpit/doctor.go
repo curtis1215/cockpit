@@ -170,8 +170,14 @@ func checkOneService(print func(string), mode string) {
 		stateStr = "運行中"
 		icon = "✅"
 	case st == service.StatusStopped:
-		stateStr = "已停止"
-		icon = "⚠️"
+		if runtime.GOOS == "darwin" && os.Geteuid() != 0 {
+			// 非 root 看不到 system domain 的 LaunchDaemon，一律回報 stopped——不可靠
+			stateStr = "無法確認（非 root 無法查詢系統服務；用 sudo cockpit doctor 取得正確狀態）"
+			icon = "ℹ️ "
+		} else {
+			stateStr = "已停止"
+			icon = "⚠️"
+		}
 	default:
 		stateStr = "狀態未知"
 		icon = "⚠️"
@@ -251,11 +257,10 @@ func checkServer(print, fail func(string), cfg config.AgentConfig, loaded bool) 
 	}
 	statusCode, err := hc.GetJSON("/api/version", "", &vResp)
 	if err != nil || statusCode >= 400 {
-		fail(fmt.Sprintf("❌ server 連通：無法連接 %s（%v）", cfg.ServerURL, err))
-		return
-	}
-
-	if vResp.Version != "" && vResp.Version != version {
+		// /api/version 屬瀏覽器面端點：在 Cloudflare Access 等保護下會拿到登入頁（HTML），
+		// 不代表 agent 不通——降級為提示，連通性以下方的 agent token 檢查為準。
+		print(fmt.Sprintf("⚠️  server 版本探查：/api/version 不可達（可能受 Cloudflare Access 保護，屬正常）"))
+	} else if vResp.Version != "" && vResp.Version != version {
 		print(fmt.Sprintf("⚠️  server 連通：已連接 %s，server 版本 %s 與本機版本 %s 不同，建議升級",
 			cfg.ServerURL, vResp.Version, version))
 	} else {
@@ -271,7 +276,7 @@ func checkServer(print, fail func(string), cfg config.AgentConfig, loaded bool) 
 	tokenStatus, tokenErr := hc.GetJSON("/api/agent/poll?wait=0", cfg.AgentToken, nil)
 	switch {
 	case tokenErr == nil || tokenStatus == 200 || tokenStatus == 204:
-		print("✅ agent token：有效")
+		print(fmt.Sprintf("✅ server 連通 + agent token 有效（%s）", cfg.ServerURL))
 	case tokenStatus == 401:
 		fail("❌ agent token：token 無效（401 Unauthorized）")
 	default:
