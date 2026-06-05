@@ -66,7 +66,9 @@ jobs:
         run: |
           pkill -f cockpit-bin || true   # 釋放前景 smoke 佔用的 port
           sleep 1
-          sudo ./cockpit-bin service install -mode serve -config $PWD/tmpc/serve.json
+          # 服務用獨立 root-owned 絕對路徑配置（相對路徑在 systemd cwd=/ 下會炸；沿用 user db 會踩 mixed-uid WAL）
+          sudo ./cockpit-bin setup serve -dir $PWD/svcc -data $PWD/svcd -listen 127.0.0.1:18788 -no-service
+          sudo ./cockpit-bin service install -mode serve -config $PWD/svcc/serve.json
           sudo ./cockpit-bin service start -mode serve
           for i in $(seq 1 10); do
             state=$(systemctl is-active cockpit-serve || true)
