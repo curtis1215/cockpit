@@ -74,6 +74,10 @@ func resolvedDockerPath() string {
 	return dockerPath
 }
 
+// ResolvedDocker returns the cached absolute path to the docker binary,
+// or "" if docker was not found. Triggers the sync.Once probe on first call.
+func ResolvedDocker() string { return resolvedDockerPath() }
+
 // New returns a Collector using the real docker executable.
 func New() *Collector {
 	return &Collector{Run: execDocker}

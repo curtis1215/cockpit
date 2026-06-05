@@ -72,6 +72,10 @@ func resolvedVmrunPath() string {
 	return vmrunPath
 }
 
+// ResolvedVmrun returns the cached absolute path to the vmrun binary,
+// or "" if vmrun was not found. Triggers the sync.Once probe on first call.
+func ResolvedVmrun() string { return resolvedVmrunPath() }
+
 // New returns an Enumerator using real system calls.
 func New() *Enumerator {
 	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile}

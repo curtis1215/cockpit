@@ -25,6 +25,8 @@ func main() {
 		runUpgrade(os.Args[2:])
 	case "service":
 		runService(os.Args[2:])
+	case "doctor":
+		runDoctor(os.Args[2:])
 	default:
 		usage()
 		os.Exit(2)
@@ -32,7 +34,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: cockpit <serve|agent|setup|version|upgrade|service> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: cockpit <serve|agent|setup|version|upgrade|service|doctor> [flags]")
 	fmt.Fprintln(os.Stderr)
 	fmt.Fprintln(os.Stderr, "  setup serve   一鍵設定控制台伺服器（建立設定、安裝服務）")
 	fmt.Fprintln(os.Stderr, "  setup agent   一鍵設定監控 agent（建立設定、安裝服務）")
