@@ -65,7 +65,23 @@ if [ ! -w "$BIN_DIR" ] && ! sudo -n true 2>/dev/null; then
   BIN_DIR="${HOME}/.local/bin"
   mkdir -p "$BIN_DIR"
   echo "注意：/usr/local/bin 不可寫，安裝至 ${BIN_DIR}"
-  echo "請確認 ${BIN_DIR} 已在您的 PATH 中。"
+  case ":$PATH:" in
+    *":${BIN_DIR}:"*) ;;  # 已在 PATH
+    *)
+      echo ""
+      echo "⚠️  ${BIN_DIR} 不在您的 PATH，安裝後 shell 會找不到 cockpit 指令。"
+      RC="${HOME}/.zshrc"; [ -n "${BASH_VERSION:-}" ] && RC="${HOME}/.bashrc"
+      if ! grep -qs '\.local/bin' "$RC" 2>/dev/null; then
+        printf '
+# cockpit installer：加入使用者 bin 目錄
+export PATH="$HOME/.local/bin:$PATH"
+' >> "$RC"
+        echo "已自動加入 PATH 設定到 ${RC}（重開 shell 或執行：source ${RC}）"
+      else
+        echo "請手動將其加入 PATH：export PATH=\"\$HOME/.local/bin:\$PATH\""
+      fi
+      ;;
+  esac
 fi
 
 # ── 複製 binary ───────────────────────────────────────────────────────────────
