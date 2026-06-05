@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +21,9 @@ func TestNonzero(t *testing.T) {
 	}
 }
 func TestCancelKills(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows group-kill 屬實驗性（msys 行程樹）")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
 	start := time.Now()
@@ -29,6 +33,9 @@ func TestCancelKills(t *testing.T) {
 	}
 }
 func TestTimeout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows group-kill 屬實驗性（msys 行程樹）")
+	}
 	start := time.Now()
 	res := Run(context.Background(), "sleep 5", "", 1*time.Second, nil)
 	if time.Since(start) > 3*time.Second || res.ExitCode == 0 {
