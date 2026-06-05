@@ -64,9 +64,15 @@ jobs:
       - name: Service e2e (ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
+          pkill -f cockpit-bin || true   # 釋放前景 smoke 佔用的 port
+          sleep 1
           sudo ./cockpit-bin service install -mode serve -config $PWD/tmpc/serve.json
           sudo ./cockpit-bin service start -mode serve
-          sleep 2
+          for i in $(seq 1 10); do
+            state=$(systemctl is-active cockpit-serve || true)
+            [ "$state" = "active" ] && break
+            sleep 1
+          done
           systemctl is-active cockpit-serve
           sudo ./cockpit-bin service stop -mode serve
           sudo ./cockpit-bin service uninstall -mode serve
