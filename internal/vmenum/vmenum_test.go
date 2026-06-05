@@ -1,6 +1,7 @@
 package vmenum
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -84,3 +85,43 @@ func TestEnumerateNoVMware(t *testing.T) {
 type errNo struct{}
 
 func (errNo) Error() string { return "vmrun not found" }
+
+// --- findVmrun unit tests ---
+
+// lookPathMiss is a LookPath stub that always returns "not found".
+func lookPathMiss(name string) (string, error) { return "", errors.New("not found") }
+
+func statHit(hit string) func(string) error {
+	return func(p string) error {
+		if p == hit {
+			return nil
+		}
+		return errors.New("not found")
+	}
+}
+
+func statNone(p string) error { return errors.New("not found") }
+
+func TestFindVmrunUsesFirstCandidate(t *testing.T) {
+	candidates := []string{"/a/vmrun", "/b/vmrun"}
+	got := findVmrun(candidates, lookPathMiss, statHit("/a/vmrun"))
+	if got != "/a/vmrun" {
+		t.Fatalf("expected /a/vmrun, got %q", got)
+	}
+}
+
+func TestFindVmrunFallsToSecondCandidate(t *testing.T) {
+	candidates := []string{"/a/vmrun", "/b/vmrun"}
+	got := findVmrun(candidates, lookPathMiss, statHit("/b/vmrun"))
+	if got != "/b/vmrun" {
+		t.Fatalf("expected /b/vmrun, got %q", got)
+	}
+}
+
+func TestFindVmrunReturnsEmptyWhenNoneFound(t *testing.T) {
+	candidates := []string{"/a/vmrun", "/b/vmrun"}
+	got := findVmrun(candidates, lookPathMiss, statNone)
+	if got != "" {
+		t.Fatalf("expected empty string when not found, got %q", got)
+	}
+}

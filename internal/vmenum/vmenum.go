@@ -2,11 +2,13 @@ package vmenum
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,15 +30,61 @@ type Enumerator struct {
 	ReadFile func(p string) (string, error)
 }
 
+// vmrunOnce caches the resolved vmrun path so we only search once per process.
+var (
+	vmrunOnce sync.Once
+	vmrunPath string // absolute path, or "" if not found
+)
+
+// VmrunCandidates is the ordered list of well-known vmrun locations probed when
+// exec.LookPath("vmrun") fails (e.g. under launchd daemon with minimal PATH).
+// Exported so tests can override without patching os.Stat.
+var VmrunCandidates = []string{
+	"/Applications/VMware Fusion.app/Contents/Public/vmrun",
+}
+
+// findVmrun returns the absolute path to the vmrun binary.
+// lookPath and stat are injectable for unit tests; production callers pass nil
+// to use the real exec.LookPath and os.Stat.
+// Returns "" when vmrun cannot be found.
+func findVmrun(candidates []string, lookPath func(string) (string, error), stat func(string) error) string {
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	if stat == nil {
+		stat = func(p string) error { _, err := os.Stat(p); return err }
+	}
+	if p, err := lookPath("vmrun"); err == nil {
+		return p
+	}
+	for _, p := range candidates {
+		if stat(p) == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+func resolvedVmrunPath() string {
+	vmrunOnce.Do(func() {
+		vmrunPath = findVmrun(VmrunCandidates, nil, nil)
+	})
+	return vmrunPath
+}
+
 // New returns an Enumerator using real system calls.
 func New() *Enumerator {
 	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile}
 }
 
 func vmrunList() (string, error) {
+	p := resolvedVmrunPath()
+	if p == "" {
+		return "", errors.New("vmrun not found")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "vmrun", "list").Output()
+	out, err := exec.CommandContext(ctx, p, "list").Output()
 	return string(out), err
 }
 

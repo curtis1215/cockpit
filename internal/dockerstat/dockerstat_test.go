@@ -1,6 +1,9 @@
 package dockerstat
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 const psOut = `{"Names":"redis","State":"running","Ports":"0.0.0.0:6379->6379/tcp"}
 {"Names":"caddy","State":"running","Ports":"0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp"}
@@ -51,3 +54,45 @@ func TestCollectEmptyPS(t *testing.T) {
 type errNo struct{}
 
 func (errNo) Error() string { return "docker not found" }
+
+// --- findDocker unit tests ---
+
+// lookPathMiss is a LookPath stub that always returns "not found".
+func lookPathMiss(name string) (string, error) { return "", errors.New("not found") }
+
+// statHit returns a stat func that reports the given path as present.
+func statHit(hit string) func(string) error {
+	return func(p string) error {
+		if p == hit {
+			return nil
+		}
+		return errors.New("not found")
+	}
+}
+
+// statNone is a stat func that never finds anything.
+func statNone(p string) error { return errors.New("not found") }
+
+func TestFindDockerUsesFirstCandidate(t *testing.T) {
+	candidates := []string{"/a/docker", "/b/docker"}
+	got := findDocker(candidates, lookPathMiss, statHit("/a/docker"))
+	if got != "/a/docker" {
+		t.Fatalf("expected /a/docker, got %q", got)
+	}
+}
+
+func TestFindDockerFallsToSecondCandidate(t *testing.T) {
+	candidates := []string{"/a/docker", "/b/docker"}
+	got := findDocker(candidates, lookPathMiss, statHit("/b/docker"))
+	if got != "/b/docker" {
+		t.Fatalf("expected /b/docker, got %q", got)
+	}
+}
+
+func TestFindDockerReturnsEmptyWhenNoneFound(t *testing.T) {
+	candidates := []string{"/a/docker", "/b/docker"}
+	got := findDocker(candidates, lookPathMiss, statNone)
+	if got != "" {
+		t.Fatalf("expected empty string when not found, got %q", got)
+	}
+}
