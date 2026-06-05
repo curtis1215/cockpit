@@ -584,5 +584,10 @@
 
   // ── Init ───────────────────────────────────────────────────────────────────
   initTheme();
+  // 顯示 server 版本（best-effort）
+  api("/api/version").then((vr) => {
+    const el = document.getElementById("server-ver");
+    if (el && vr && vr.version) el.textContent = vr.version;
+  }).catch(() => {});
   loadAll();
 })();

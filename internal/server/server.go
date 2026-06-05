@@ -20,6 +20,7 @@ type Server struct {
 	invPath      string
 	onCheck      func()
 	mux          *http.ServeMux
+	version      string
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
@@ -31,6 +32,9 @@ func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Invent
 	s.routes()
 	return s
 }
+
+// SetVersion stores the server binary version string, exposed via /api/version.
+func (s *Server) SetVersion(v string) { s.version = v }
 
 // SetInventoryPath sets the path for persistent inventory writeback.
 func (s *Server) SetInventoryPath(p string) {
@@ -81,6 +85,13 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}`))
+	})
+	s.mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
+		v := s.version
+		if v == "" {
+			v = "dev"
+		}
+		writeJSON(w, 200, map[string]string{"version": v})
 	})
 	s.mux.HandleFunc("/api/systems", s.apiSystemsEnriched)
 	s.registerAgentAPI()

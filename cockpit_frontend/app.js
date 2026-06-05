@@ -765,6 +765,12 @@
     setGroup(localStorage.getItem("cockpit-group") || "flat");
     setLayout(localStorage.getItem("cockpit-panel-layout") || "side");
     emptyCurrentJob();
+    // 顯示 server 版本（best-effort）
+    try {
+      const vr = await api("/api/version");
+      const el = $("#server-ver");
+      if (el && vr && vr.version) el.textContent = vr.version;
+    } catch (_) {}
     try {
       await loadInstalls();
       await loadJobs();

@@ -37,6 +37,7 @@ func runServe(args []string) {
 	}
 	srv := server.NewWithInventory(st, cfg.EnrollSecret, inv)
 	srv.SetInventoryPath(cfg.InventoryPath)
+	srv.SetVersion(version)
 
 	tr := translate.NewWithCmd(cfg.TranslateCmd)
 	// 用 srv.Inventory()（熱載後快照）而非啟動時的 inv——否則 UI 後加的軟體永遠不會被刷新。

@@ -61,4 +61,23 @@ func contains(s, sub string) bool {
 	return len(sub) == 0
 }
 
+func TestVersionEndpoint(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// default: empty version → "dev"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/version", nil))
+	if rec.Code != 200 || !contains(rec.Body.String(), `"dev"`) {
+		t.Fatalf("version (default): %d %s", rec.Code, rec.Body.String())
+	}
+
+	// set version → returned verbatim
+	srv.SetVersion("v0.1.5")
+	rec2 := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec2, httptest.NewRequest("GET", "/api/version", nil))
+	if rec2.Code != 200 || !contains(rec2.Body.String(), "v0.1.5") {
+		t.Fatalf("version (set): %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
 var _ = http.MethodGet
