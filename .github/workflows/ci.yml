@@ -32,16 +32,16 @@ jobs:
           go-version-file: go.mod
 
       - name: Build binary
-        run: go build -o cockpit ./cmd/cockpit
+        run: go build -o cockpit-bin ./cmd/cockpit
 
       - name: Version check
-        run: ./cockpit version
+        run: ./cockpit-bin version
 
       - name: Setup serve config
-        run: ./cockpit setup serve -dir ./tmpc -data ./tmpd -listen 127.0.0.1:18787 -no-service
+        run: ./cockpit-bin setup serve -dir ./tmpc -data ./tmpd -listen 127.0.0.1:18787 -no-service
 
       - name: Start serve in background
-        run: ./cockpit serve -config ./tmpc/serve.json &
+        run: ./cockpit-bin serve -config ./tmpc/serve.json &
 
       - name: Poll health endpoint
         run: |
@@ -64,9 +64,9 @@ jobs:
       - name: Service e2e (ubuntu only)
         if: matrix.os == 'ubuntu-latest'
         run: |
-          sudo ./cockpit service install -mode serve -config $PWD/tmpc/serve.json
-          sudo ./cockpit service start -mode serve
+          sudo ./cockpit-bin service install -mode serve -config $PWD/tmpc/serve.json
+          sudo ./cockpit-bin service start -mode serve
           sleep 2
           systemctl is-active cockpit-serve
-          sudo ./cockpit service stop -mode serve
-          sudo ./cockpit service uninstall -mode serve
+          sudo ./cockpit-bin service stop -mode serve
+          sudo ./cockpit-bin service uninstall -mode serve
