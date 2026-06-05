@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE TABLE IF NOT EXISTS machine_state (
   machine TEXT PRIMARY KEY, check_requested INTEGER NOT NULL DEFAULT 0,
+  upgrade_requested INTEGER NOT NULL DEFAULT 0,
   updated_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS metrics (

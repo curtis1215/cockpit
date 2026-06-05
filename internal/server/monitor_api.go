@@ -270,6 +270,21 @@ func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if sub == "upgrade-agent" {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(405)
+			return
+		}
+		sys, err := s.st.SystemByID(id)
+		if err != nil {
+			writeJSON(w, 404, map[string]string{"error": "system not found"})
+			return
+		}
+		s.st.SetUpgradeRequested(sys.Label)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+		return
+	}
+
 	// DELETE: cascade remove
 	if r.Method == http.MethodDelete && sub == "" {
 		if err := s.st.DeleteSystemCascade(id); err != nil {

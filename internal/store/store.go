@@ -47,6 +47,14 @@ func Open(path string) (*Store, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, err
 	}
+	// Defensive migration: add upgrade_requested to machine_state if the column
+	// doesn't exist yet (production DBs created before this change won't have it).
+	// SQLite errors with "duplicate column name" if it already exists — ignore that.
+	if _, err := db.Exec(`ALTER TABLE machine_state ADD COLUMN upgrade_requested INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !contains(err.Error(), "duplicate column name") {
+			return nil, err
+		}
+	}
 	return &Store{db: db}, nil
 }
 
@@ -568,6 +576,22 @@ func (s *Store) TakeCheckRequested(machine string) bool {
 	s.db.QueryRow(`SELECT check_requested FROM machine_state WHERE machine=?`, machine).Scan(&v)
 	if v != 0 {
 		s.db.Exec(`UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=?`, machine)
+		return true
+	}
+	return false
+}
+
+func (s *Store) SetUpgradeRequested(machine string) error {
+	_, err := s.db.Exec(`INSERT INTO machine_state (machine,upgrade_requested,updated_at) VALUES (?,1,datetime('now'))
+		ON CONFLICT(machine) DO UPDATE SET upgrade_requested=1, updated_at=datetime('now')`, machine)
+	return err
+}
+
+func (s *Store) TakeUpgradeRequested(machine string) bool {
+	var v int
+	s.db.QueryRow(`SELECT upgrade_requested FROM machine_state WHERE machine=?`, machine).Scan(&v)
+	if v != 0 {
+		s.db.Exec(`UPDATE machine_state SET upgrade_requested=0, updated_at=datetime('now') WHERE machine=?`, machine)
 		return true
 	}
 	return false

@@ -116,7 +116,7 @@ func TestRun_Upgrade(t *testing.T) {
 		t.Fatalf("write target: %v", err)
 	}
 
-	if err := selfupdate.Run(nil, srv.URL, "owner/repo", "1.0.0", target); err != nil {
+	if _, err := selfupdate.Run(nil, srv.URL, "owner/repo", "1.0.0", target); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -156,7 +156,7 @@ func TestRun_AlreadyLatest(t *testing.T) {
 	}
 
 	// currentVersion matches tag (without "v").
-	if err := selfupdate.Run(nil, srv.URL, "owner/repo", "9.9.9", target); err != nil {
+	if _, err := selfupdate.Run(nil, srv.URL, "owner/repo", "9.9.9", target); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
 

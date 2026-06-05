@@ -63,33 +63,36 @@ func AssetName(goos, goarch, version string) string {
 //   - repo: "owner/repo"
 //   - currentVersion: the running binary's version (without leading "v")
 //   - targetPath: path to replace (empty => os.Executable())
-func Run(hc *http.Client, base, repo, currentVersion, targetPath string) error {
+//
+// Returns (true, nil) when the binary was replaced, (false, nil) when already
+// up-to-date, and (false, err) on any failure.
+func Run(hc *http.Client, base, repo, currentVersion, targetPath string) (bool, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 60 * time.Second}
 	}
 
 	tag, assets, err := Latest(hc, base, repo)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	// Strip leading "v" from the tag for comparison.
 	tagVer := strings.TrimPrefix(tag, "v")
 	if tagVer == currentVersion {
 		fmt.Println("cockpit 已是最新版本:", currentVersion)
-		return nil
+		return false, nil
 	}
 
 	assetName := AssetName(runtime.GOOS, runtime.GOARCH, tagVer)
 	downloadURL, ok := assets[assetName]
 	if !ok {
-		return fmt.Errorf("no asset %q found in release %s", assetName, tag)
+		return false, fmt.Errorf("no asset %q found in release %s", assetName, tag)
 	}
 
 	if targetPath == "" {
 		exe, err := os.Executable()
 		if err != nil {
-			return fmt.Errorf("resolve executable path: %w", err)
+			return false, fmt.Errorf("resolve executable path: %w", err)
 		}
 		targetPath = exe
 	}
@@ -97,22 +100,22 @@ func Run(hc *http.Client, base, repo, currentVersion, targetPath string) error {
 	// Download asset.
 	resp, err := hc.Get(downloadURL)
 	if err != nil {
-		return fmt.Errorf("download asset: %w", err)
+		return false, fmt.Errorf("download asset: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download asset: HTTP %d", resp.StatusCode)
+		return false, fmt.Errorf("download asset: HTTP %d", resp.StatusCode)
 	}
 
 	// Extract "cockpit" binary from tar.gz into a temp file alongside targetPath.
 	newPath := targetPath + ".new"
 	if err := extractBinary(resp.Body, newPath); err != nil {
 		os.Remove(newPath)
-		return fmt.Errorf("extract binary: %w", err)
+		return false, fmt.Errorf("extract binary: %w", err)
 	}
 	if err := os.Chmod(newPath, 0755); err != nil {
 		os.Remove(newPath)
-		return fmt.Errorf("chmod new binary: %w", err)
+		return false, fmt.Errorf("chmod new binary: %w", err)
 	}
 
 	// Atomic replacement: target -> target.old, new -> target, remove old.
@@ -120,18 +123,18 @@ func Run(hc *http.Client, base, repo, currentVersion, targetPath string) error {
 	os.Remove(oldPath) // best-effort remove stale .old
 	if err := os.Rename(targetPath, oldPath); err != nil {
 		os.Remove(newPath)
-		return fmt.Errorf("backup current binary: %w", err)
+		return false, fmt.Errorf("backup current binary: %w", err)
 	}
 	if err := os.Rename(newPath, targetPath); err != nil {
 		// Try to restore.
 		os.Rename(oldPath, targetPath)
 		os.Remove(newPath)
-		return fmt.Errorf("install new binary: %w", err)
+		return false, fmt.Errorf("install new binary: %w", err)
 	}
 	os.Remove(oldPath) // best-effort
 
 	fmt.Printf("cockpit 已更新至 %s\n", tagVer)
-	return nil
+	return true, nil
 }
 
 // extractBinary reads a gzip+tar stream and writes the first entry named

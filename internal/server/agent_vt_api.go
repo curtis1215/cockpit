@@ -80,6 +80,10 @@ func (s *Server) vtPoll(w http.ResponseWriter, r *http.Request) {
 				"version_regex": nilIfEmpty(claimed.VersionRegex)}})
 			return
 		}
+		if s.st.TakeUpgradeRequested(machine) {
+			writeJSON(w, 200, map[string]string{"type": "upgrade"})
+			return
+		}
 		if s.st.TakeCheckRequested(machine) {
 			writeJSON(w, 200, map[string]string{"type": "check"})
 			return

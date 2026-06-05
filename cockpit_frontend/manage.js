@@ -54,8 +54,9 @@
   }
 
   // ── State ──────────────────────────────────────────────────────────────────
-  let SYSTEMS  = [];  // from GET /api/systems
-  let INSTALLS = [];  // from GET /api/installs
+  let SYSTEMS      = [];  // from GET /api/systems
+  let INSTALLS     = [];  // from GET /api/installs
+  let serverVersion = ""; // from GET /api/version
 
   // ── Load data ──────────────────────────────────────────────────────────────
   async function loadAll() {
@@ -200,9 +201,12 @@
       const [, badgeCls] = HSTATUS[st] || HSTATUS.offline;
       const swCount = INSTALLS.filter((i) => i.machine === m.label).length;
 
+      const agentVer = m.agent_version || "";
+      const showUpgradeBtn = agentVer && serverVersion && agentVer !== serverVersion;
+
       const metaFrag = st === "pending"
         ? `<span class="badge b-info">待 agent 連線</span>`
-        : `<span style="font-size:12px;color:var(--text-3);">${m.os || ""}${m.arch ? " / " + m.arch : ""}${m.agent_version ? " · v" + m.agent_version : ""}</span>`;
+        : `<span style="font-size:12px;color:var(--text-3);">${m.os || ""}${m.arch ? " / " + m.arch : ""}${agentVer ? " · v" + agentVer : ""}</span>`;
 
       return `
         <div class="mrow" data-machine-id="${escHtml(m.id)}">
@@ -213,6 +217,7 @@
           ${metaFrag}
           <span style="flex:1;"></span>
           <span style="font-size:12px;color:var(--text-3);flex:none;">${swCount} 套軟體</span>
+          ${showUpgradeBtn ? `<button class="btn btn-xs" data-upgrade-agent="${escHtml(m.id)}" title="升級 agent 至 v${escHtml(serverVersion)}" style="color:var(--warn);">⬆ 升級 agent</button>` : ""}
           <button class="btn btn-xs" data-regen-token="${escHtml(m.id)}" title="重新產生 Enroll Token">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
             重生 Token
@@ -539,6 +544,9 @@
 
   // 機器清單
   $("#machine-list").addEventListener("click", (e) => {
+    const upgrade = e.target.closest("[data-upgrade-agent]");
+    if (upgrade) return upgradeAgent(upgrade.getAttribute("data-upgrade-agent"));
+
     const regen = e.target.closest("[data-regen-token]");
     if (regen) return regenToken(regen.getAttribute("data-regen-token"));
 
@@ -582,12 +590,26 @@
     }
   });
 
+  // ── Upgrade agent ─────────────────────────────────────────────────────────
+  async function upgradeAgent(id) {
+    try {
+      await api(`/api/systems/${encodeURIComponent(id)}/upgrade-agent`, { method: "POST" });
+      toast("ok", "已派送升級，約 30 秒後生效");
+      setTimeout(loadAll, 35000);
+    } catch (e) {
+      toast("err", "升級派送失敗：" + e.message);
+    }
+  }
+
   // ── Init ───────────────────────────────────────────────────────────────────
   initTheme();
-  // 顯示 server 版本（best-effort）
+  // 顯示 server 版本（best-effort）並存入 serverVersion
   api("/api/version").then((vr) => {
     const el = document.getElementById("server-ver");
-    if (el && vr && vr.version) el.textContent = vr.version;
+    if (vr && vr.version) {
+      serverVersion = vr.version;
+      if (el) el.textContent = vr.version;
+    }
   }).catch(() => {});
   loadAll();
 })();

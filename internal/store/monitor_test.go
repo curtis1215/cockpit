@@ -99,6 +99,35 @@ func TestVMsReplaceAndLink(t *testing.T) {
 	}
 }
 
+func TestUpgradeFlagOneShot(t *testing.T) {
+	s := mOpen(t)
+	// Before setting: TakeUpgradeRequested returns false.
+	if s.TakeUpgradeRequested("mac") {
+		t.Fatal("expected false before set")
+	}
+	// Set flag.
+	if err := s.SetUpgradeRequested("mac"); err != nil {
+		t.Fatalf("set: %v", err)
+	}
+	// First take: returns true and clears the flag.
+	if !s.TakeUpgradeRequested("mac") {
+		t.Fatal("expected true after set")
+	}
+	// Second take: flag is gone — must return false (one-shot).
+	if s.TakeUpgradeRequested("mac") {
+		t.Fatal("expected false on second take (one-shot)")
+	}
+	// Idempotent SET then SET: still only one take returns true.
+	s.SetUpgradeRequested("mac")
+	s.SetUpgradeRequested("mac")
+	if !s.TakeUpgradeRequested("mac") {
+		t.Fatal("expected true after double-set")
+	}
+	if s.TakeUpgradeRequested("mac") {
+		t.Fatal("expected false after second take (double-set)")
+	}
+}
+
 func TestDownsampleAndPrune(t *testing.T) {
 	s := mOpen(t)
 	id, _ := s.EnsureSystemForMachine("mac")

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
+	"net/http"
 	"os"
 	"runtime"
 	"sync/atomic"
@@ -13,6 +15,7 @@ import (
 	"github.com/curtis1215/cockpit/internal/dockerstat"
 	"github.com/curtis1215/cockpit/internal/executor"
 	"github.com/curtis1215/cockpit/internal/httpx"
+	"github.com/curtis1215/cockpit/internal/selfupdate"
 	"github.com/curtis1215/cockpit/internal/version"
 	"github.com/curtis1215/cockpit/internal/vmenum"
 )
@@ -25,10 +28,16 @@ type Agent struct {
 	Version      string
 	HeartbeatSec int
 	SaveToken    func(string) error
-	client       *httpx.Client
-	col          *collect.Collector
-	docker       *dockerstat.Collector
-	vmenum       *vmenum.Enumerator
+	// doUpgrade is called on "upgrade" poll events. Returns (updated, error).
+	// Defaults to a wrapper around selfupdate.Run using COCKPIT_REPO env or
+	// the default repo "curtis1215/cockpit". Inject in tests to avoid real network calls.
+	doUpgrade func() (bool, error)
+	// exit terminates the process. Defaults to os.Exit. Injectable for testing.
+	exit   func(int)
+	client *httpx.Client
+	col    *collect.Collector
+	docker *dockerstat.Collector
+	vmenum *vmenum.Enumerator
 }
 
 func (a *Agent) c() *httpx.Client {
@@ -36,6 +45,38 @@ func (a *Agent) c() *httpx.Client {
 		a.client = httpx.New(a.ServerURL, 20*time.Second)
 	}
 	return a.client
+}
+
+// defaultDoUpgrade returns the default upgrade func: wraps selfupdate.Run with
+// COCKPIT_REPO env or the hardcoded default repo, current version, and empty targetPath.
+func (a *Agent) defaultDoUpgrade() func() (bool, error) {
+	return func() (bool, error) {
+		repo := os.Getenv("COCKPIT_REPO")
+		if repo == "" {
+			repo = "curtis1215/cockpit"
+		}
+		return selfupdate.Run(
+			&http.Client{Timeout: 60 * time.Second},
+			"https://api.github.com",
+			repo,
+			a.Version,
+			"",
+		)
+	}
+}
+
+func (a *Agent) getDoUpgrade() func() (bool, error) {
+	if a.doUpgrade != nil {
+		return a.doUpgrade
+	}
+	return a.defaultDoUpgrade()
+}
+
+func (a *Agent) getExit() func(int) {
+	if a.exit != nil {
+		return a.exit
+	}
+	return os.Exit
 }
 
 func hostLabel() string {
@@ -139,6 +180,18 @@ func (a *Agent) Run() error {
 		switch evt {
 		case "job":
 			a.RunJob(job, 2*time.Second, 30*time.Minute)
+		case "upgrade":
+			updated, err := a.getDoUpgrade()()
+			if err != nil {
+				log.Printf("agent: upgrade failed: %v — continuing", err)
+				continue
+			}
+			if updated {
+				log.Println("agent: binary replaced — restarting via supervisor")
+				a.getExit()(0)
+			} else {
+				log.Println("agent: already up-to-date — continuing")
+			}
 		case "check":
 			a.ReportVersions(60 * time.Second)
 		}

@@ -30,7 +30,7 @@ func runUpgrade(args []string) {
 	fs.Parse(args)
 
 	hc := &http.Client{Timeout: 60 * time.Second}
-	if err := selfupdate.Run(hc, "https://api.github.com", *repo, version, ""); err != nil {
+	if _, err := selfupdate.Run(hc, "https://api.github.com", *repo, version, ""); err != nil {
 		log.Fatalf("upgrade: %v", err)
 	}
 }
