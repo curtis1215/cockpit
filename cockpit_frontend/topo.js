@@ -335,7 +335,7 @@
 
   function titleBar(dot, name, sub) {
     $("#drawer-title").innerHTML = `<span class="sdot ${dot}"></span>
-      <div style="min-width:0;"><div class="font-display" style="font-weight:600; font-size:14px;">${name}</div>
+      <div style="min-width:0;"><div class="font-display" style="font-weight:600; font-size:14px; color:var(--text);">${name}</div>
       ${sub ? `<div style="font-size:11px; color:var(--text-3);">${sub}</div>` : ""}</div>`;
   }
 
@@ -493,9 +493,9 @@
 
   /* 詳情裡可點的關聯列 → 跳到該節點 */
   function relRow(key, icon, name, sub, dot) {
-    return `<button class="rel-row" data-goto="${key}" style="display:flex; align-items:center; gap:9px; width:100%; text-align:left; padding:8px 10px; border:1px solid var(--border); background:var(--surface); border-radius:9px; cursor:pointer; transition:.14s;">
+    return `<button class="rel-row" data-goto="${key}" style="display:flex; align-items:center; gap:9px; width:100%; text-align:left; padding:8px 10px; border:1px solid var(--border); background:var(--surface); color:var(--text); border-radius:9px; cursor:pointer; transition:.14s;">
       <span class="sdot ${dot}"></span><span style="color:var(--text-3); display:flex;">${icon}</span>
-      <span style="flex:1; min-width:0;"><span style="font-size:12.5px; font-weight:500;">${name}</span><div style="font-size:10.5px; color:var(--text-3);">${sub}</div></span>
+      <span style="flex:1; min-width:0;"><span style="font-size:12.5px; font-weight:500; color:var(--text);">${name}</span><div style="font-size:10.5px; color:var(--text-3);">${sub}</div></span>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg>
     </button>`;
   }
@@ -520,8 +520,8 @@
         <span class="mono" style="font-size:13px; font-weight:600; color:${barColor(v)};">${v}%</span></div>
       <span class="bar" style="display:block;"><i style="width:${v}%; background:${barColor(v)};"></i></span></div>`;
   }
-  const kv = (k, v) => `<div style="border:1px solid var(--border); border-radius:10px; padding:9px 11px; background:var(--surface);"><div style="font-size:11px; color:var(--text-3); margin-bottom:4px;">${k}</div><div class="mono" style="font-size:13px; font-weight:600;">${v}</div></div>`;
-  const chip = (k, v) => `<span style="display:inline-flex; gap:5px; align-items:center; font-size:11.5px; color:var(--text-2); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:4px 9px;"><span style="color:var(--text-3);">${k}</span><span class="mono">${v}</span></span>`;
+  const kv = (k, v) => `<div style="border:1px solid var(--border); border-radius:10px; padding:9px 11px; background:var(--surface);"><div style="font-size:11px; color:var(--text-3); margin-bottom:4px;">${k}</div><div class="mono" style="font-size:13px; font-weight:600; color:var(--text);">${v}</div></div>`;
+  const chip = (k, v) => `<span style="display:inline-flex; gap:5px; align-items:center; font-size:11.5px; color:var(--text-2); background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:4px 9px;"><span style="color:var(--text-3);">${k}</span><span class="mono" style="color:var(--text-2);">${v}</span></span>`;
 
   function mdToHtml(src) {
     const esc = (s) => s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
