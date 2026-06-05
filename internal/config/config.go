@@ -11,6 +11,7 @@ type ServeConfig struct {
 	EnrollSecret  string `json:"enroll_secret"`
 	InventoryPath string `json:"inventory_path"`
 	CheckHours    int    `json:"check_hours"`
+	TranslateCmd  string `json:"translate_cmd"` // changelog 翻譯指令（bash -lc 執行、stdin 餵 prompt），空=claude -p
 }
 
 type AgentConfig struct {

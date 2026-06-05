@@ -1,6 +1,9 @@
 package translate
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestTranslate(t *testing.T) {
 	tr := &Translator{Run: func(prompt string) (string, error) { return "中文摘要", nil }}
@@ -21,3 +24,15 @@ var errFake = errBoom{}
 type errBoom struct{}
 
 func (errBoom) Error() string { return "boom" }
+
+func TestNewWithCmdStdin(t *testing.T) {
+	tr := NewWithCmd("cat") // bash -lc cat：原樣回吐 stdin
+	out := tr.Changelog("hello-raw")
+	if out == "" || !strings.Contains(out, "hello-raw") || !strings.Contains(out, "技術翻譯") {
+		t.Fatalf("stdin path: %q", out)
+	}
+	boom := NewWithCmd("exit 3")
+	if boom.Changelog("x") != "" {
+		t.Fatal("cmd failure → empty")
+	}
+}
