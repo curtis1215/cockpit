@@ -86,8 +86,51 @@ echo ""
 echo "✅ cockpit 安裝完成！"
 "${BIN_DIR}/cockpit" version 2>/dev/null || true
 echo ""
-echo "下一步："
-echo "  serve   — 啟動控制台 API 伺服器：cockpit serve -config /etc/cockpit/serve.json"
-echo "  agent   — 啟動監控 agent：cockpit agent -config /etc/cockpit/agent.json"
-echo "  service — 以系統服務形式安裝：cockpit service install -mode serve -config /etc/cockpit/serve.json"
-echo "  upgrade — 自動更新至最新版本：cockpit upgrade"
+
+# ── 處理傳入的子命令參數 ────────────────────────────────────────────────────────
+# 支援：curl ... | sh -s -- serve
+#        curl ... | sh -s -- agent <server_url> <enroll_token>
+SUBCMD="${1:-}"
+
+_run_as_root() {
+  if [ "$(id -u)" = "0" ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    echo "⚠️  需要 root 權限，但找不到 sudo。請以 root 身份手動執行：" >&2
+    echo "  $*" >&2
+    return 1
+  fi
+}
+
+case "$SUBCMD" in
+  serve)
+    echo "🔧 執行：cockpit setup serve …"
+    _run_as_root "${BIN_DIR}/cockpit" setup serve
+    ;;
+  agent)
+    AGENT_SERVER="${2:-}"
+    AGENT_TOKEN="${3:-}"
+    if [ -z "$AGENT_SERVER" ] || [ -z "$AGENT_TOKEN" ]; then
+      echo "❌ 用法：curl ... | sh -s -- agent <server_url> <enroll_token>" >&2
+      exit 1
+    fi
+    echo "🔧 執行：cockpit setup agent …"
+    _run_as_root "${BIN_DIR}/cockpit" setup agent -server "$AGENT_SERVER" -token "$AGENT_TOKEN"
+    ;;
+  "")
+    echo "下一步："
+    echo "  一鍵設定控制台  — curl -fsSL .../install.sh | sh -s -- serve"
+    echo "  一鍵設定 agent  — curl -fsSL .../install.sh | sh -s -- agent <server_url> <token>"
+    echo ""
+    echo "或手動執行："
+    echo "  sudo cockpit setup serve"
+    echo "  sudo cockpit setup agent -server <url> -token <token>"
+    echo "  upgrade — 自動更新至最新版本：cockpit upgrade"
+    ;;
+  *)
+    echo "❌ 未知的子命令：$SUBCMD（支援 serve / agent）" >&2
+    exit 1
+    ;;
+esac

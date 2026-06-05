@@ -134,33 +134,49 @@
   // ── Enroll modal (shown after create OR regen-token) ───────────────────────
   function showEnrollModal(label, enrollToken) {
     const origin     = location.origin;
+    const oneLiner   = `curl -fsSL https://raw.githubusercontent.com/curtis1215/cockpit/main/install.sh | sh -s -- agent ${origin} ${enrollToken}`;
     const configJson = JSON.stringify({ server_url: origin, enroll_token: enrollToken });
-    const cmd        = "cockpit agent -config agent.json";
+    const fallbackCmd = "cockpit agent -config agent.json";
 
     openModal(`
       ${modalHead("安裝指令", `機器：${label}`)}
       <div style="padding:18px 18px 22px;">
         <p style="font-size:13px;color:var(--text-2);margin:0 0 14px;">
-          在目標機器上建立 <code class="mono" style="background:var(--surface-2);padding:1px 5px;border-radius:4px;">agent.json</code>，然後執行指令：
+          在目標機器上貼上以下一行指令即可完成安裝與啟動：
         </p>
-        ${fieldGroup("agent.json 內容", `
-          <div class="term" id="enroll-config">${escHtml(configJson)}
-            <button class="btn btn-xs copy-btn" id="copy-cfg">複製</button>
+        ${fieldGroup("一鍵安裝指令", `
+          <div class="term" id="enroll-oneliner" style="word-break:break-all;">${escHtml(oneLiner)}
+            <button class="btn btn-xs copy-btn" id="copy-oneliner">複製</button>
           </div>
         `)}
-        ${fieldGroup("啟動指令", `
-          <div class="term">${escHtml(cmd)}
-            <button class="btn btn-xs copy-btn" id="copy-cmd">複製</button>
+        <details style="margin-top:12px;">
+          <summary style="font-size:12px;color:var(--text-3);cursor:pointer;user-select:none;">備用：手動設定</summary>
+          <div style="margin-top:10px;">
+            <p style="font-size:12px;color:var(--text-3);margin:0 0 8px;">
+              若 curl 無法使用，可手動建立
+              <code class="mono" style="background:var(--surface-2);padding:1px 5px;border-radius:4px;">agent.json</code>，再執行啟動指令：
+            </p>
+            ${fieldGroup("agent.json 內容", `
+              <div class="term" id="enroll-config">${escHtml(configJson)}
+                <button class="btn btn-xs copy-btn" id="copy-cfg">複製</button>
+              </div>
+            `)}
+            ${fieldGroup("啟動指令", `
+              <div class="term">${escHtml(fallbackCmd)}
+                <button class="btn btn-xs copy-btn" id="copy-cmd">複製</button>
+              </div>
+            `)}
           </div>
-        `)}
-        <div style="display:flex;justify-content:flex-end;margin-top:6px;">
+        </details>
+        <div style="display:flex;justify-content:flex-end;margin-top:16px;">
           <button class="btn btn-primary" data-close>完成</button>
         </div>
       </div>
     `);
 
+    document.getElementById("copy-oneliner").addEventListener("click", function () { copy(oneLiner, this); });
     document.getElementById("copy-cfg").addEventListener("click", function () { copy(configJson, this); });
-    document.getElementById("copy-cmd").addEventListener("click", function () { copy(cmd, this); });
+    document.getElementById("copy-cmd").addEventListener("click", function () { copy(fallbackCmd, this); });
   }
 
   function escHtml(s) {
