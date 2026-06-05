@@ -32,6 +32,7 @@ type System struct {
 	AgentToken   string `json:"-"`
 	EnrollToken  string `json:"-"`
 	Created      int64  `json:"created"`
+	MachineUUID  string `json:"machine_uuid"`
 }
 
 type Store struct{ db *sql.DB }
@@ -51,6 +52,12 @@ func Open(path string) (*Store, error) {
 	// doesn't exist yet (production DBs created before this change won't have it).
 	// SQLite errors with "duplicate column name" if it already exists — ignore that.
 	if _, err := db.Exec(`ALTER TABLE machine_state ADD COLUMN upgrade_requested INTEGER NOT NULL DEFAULT 0`); err != nil {
+		if !contains(err.Error(), "duplicate column name") {
+			return nil, err
+		}
+	}
+	// Defensive migration: add machine_uuid to systems.
+	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN machine_uuid TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
@@ -104,16 +111,17 @@ func (s *Store) RegisterSystem(label, osName, arch string) (string, string, erro
 
 func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 	var s System
-	var hostID, agentToken, enrollToken sql.NullString
+	var hostID, agentToken, enrollToken, machineUUID sql.NullString
 	err := row.Scan(&s.ID, &s.Label, &s.Role, &s.OS, &s.Arch, &s.Kind, &hostID,
-		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &enrollToken, &s.Created)
+		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &enrollToken, &s.Created, &machineUUID)
 	s.HostID = hostID.String
 	s.AgentToken = agentToken.String
 	s.EnrollToken = enrollToken.String
+	s.MachineUUID = machineUUID.String
 	return s, err
 }
 
-const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,enroll_token,created"
+const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,enroll_token,created,machine_uuid"
 
 func (s *Store) SystemByID(id string) (System, error) {
 	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE id=?", id)
@@ -148,11 +156,24 @@ func (s *Store) Heartbeat(token, agentVersion string) error {
 }
 
 // HeartbeatByID updates last_seen, status, agent_status, and agent_version for a system by its ID.
-func (s *Store) HeartbeatByID(systemID, agentVersion string) error {
+// If machineUUID is non-empty it also updates machine_uuid.
+func (s *Store) HeartbeatByID(systemID, agentVersion string, machineUUIDs ...string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	res, err := s.db.Exec(
-		`UPDATE systems SET status='online', agent_status='ok', agent_version=?, last_seen=? WHERE id=?`,
-		agentVersion, now, systemID)
+	uuid := ""
+	if len(machineUUIDs) > 0 {
+		uuid = machineUUIDs[0]
+	}
+	var res sql.Result
+	var err error
+	if uuid != "" {
+		res, err = s.db.Exec(
+			`UPDATE systems SET status='online', agent_status='ok', agent_version=?, last_seen=?, machine_uuid=? WHERE id=?`,
+			agentVersion, now, uuid, systemID)
+	} else {
+		res, err = s.db.Exec(
+			`UPDATE systems SET status='online', agent_status='ok', agent_version=?, last_seen=? WHERE id=?`,
+			agentVersion, now, systemID)
+	}
 	if err != nil {
 		return err
 	}
@@ -160,6 +181,15 @@ func (s *Store) HeartbeatByID(systemID, agentVersion string) error {
 		return ErrNotFound
 	}
 	return nil
+}
+
+// SetMachineUUID updates the machine_uuid field for a system. Does nothing if uuid is empty.
+func (s *Store) SetMachineUUID(systemID, uuid string) error {
+	if uuid == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`UPDATE systems SET machine_uuid=? WHERE id=?`, uuid, systemID)
+	return err
 }
 
 func (s *Store) ListSystems() ([]System, error) {

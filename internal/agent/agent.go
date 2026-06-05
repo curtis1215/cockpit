@@ -1,13 +1,17 @@
 package agent
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +23,53 @@ import (
 	"github.com/curtis1215/cockpit/internal/version"
 	"github.com/curtis1215/cockpit/internal/vmenum"
 )
+
+// machineUUID returns the hardware UUID of this machine.
+// linux: reads /sys/class/dmi/id/product_uuid (trimmed; "" on error/no-permission).
+// darwin: runs `ioreg -rd1 -c IOPlatformExpertDevice` and parses IOPlatformUUID.
+// other: "".
+func machineUUID() string {
+	switch runtime.GOOS {
+	case "linux":
+		b, err := os.ReadFile("/sys/class/dmi/id/product_uuid")
+		if err != nil {
+			return ""
+		}
+		return strings.TrimSpace(string(b))
+	case "darwin":
+		out, err := exec.Command("ioreg", "-rd1", "-c", "IOPlatformExpertDevice").Output()
+		if err != nil {
+			return ""
+		}
+		scanner := bufio.NewScanner(bytes.NewReader(out))
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Look for: "IOPlatformUUID" = "XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+			if strings.Contains(line, "IOPlatformUUID") {
+				i := strings.Index(line, `"IOPlatformUUID"`)
+				if i < 0 {
+					continue
+				}
+				rest := line[i+len(`"IOPlatformUUID"`):]
+				// find = then first "..."
+				eq := strings.Index(rest, "=")
+				if eq < 0 {
+					continue
+				}
+				rest = strings.TrimSpace(rest[eq+1:])
+				if len(rest) >= 2 && rest[0] == '"' {
+					end := strings.Index(rest[1:], `"`)
+					if end >= 0 {
+						return rest[1 : end+1]
+					}
+				}
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
 
 type Agent struct {
 	ServerURL    string
@@ -98,6 +149,9 @@ func (a *Agent) ensureEnrolled() error {
 	body := map[string]string{
 		"label": hostLabel(), "os": runtime.GOOS, "arch": runtime.GOARCH,
 	}
+	if uuid := machineUUID(); uuid != "" {
+		body["machine_uuid"] = uuid
+	}
 	if a.EnrollToken != "" {
 		body["enroll_token"] = a.EnrollToken
 	} else {
@@ -121,8 +175,11 @@ func (a *Agent) ensureEnrolled() error {
 }
 
 func (a *Agent) heartbeat() error {
-	_, err := a.c().PostJSON("/api/agent/heartbeat", a.Token,
-		map[string]string{"agent_version": a.Version}, nil)
+	body := map[string]string{"agent_version": a.Version}
+	if uuid := machineUUID(); uuid != "" {
+		body["machine_uuid"] = uuid
+	}
+	_, err := a.c().PostJSON("/api/agent/heartbeat", a.Token, body, nil)
 	return err
 }
 

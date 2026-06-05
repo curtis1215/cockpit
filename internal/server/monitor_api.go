@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,12 +11,20 @@ import (
 	"github.com/curtis1215/cockpit/internal/store"
 )
 
+// looseName normalises a string to lowercase alphanumeric only (for loose name matching).
+var looseNonAlnum = regexp.MustCompile(`[^a-z0-9]`)
+
+func looseName(s string) string {
+	return looseNonAlnum.ReplaceAllString(strings.ToLower(s), "")
+}
+
 func (s *Server) registerMonitorAPI() {
 	s.mux.HandleFunc("/api/agent/report-metrics", s.reportMetrics)
 	s.mux.HandleFunc("/api/agent/report-services", s.reportServices)
 	s.mux.HandleFunc("/api/agent/report-vms", s.reportVMs)
 	s.mux.HandleFunc("/api/services", s.apiServices)
 	s.mux.HandleFunc("/api/vms", s.apiVMs)
+	s.mux.HandleFunc("/api/vms/", s.apiVMSub)
 	s.mux.HandleFunc("/api/systems/", s.apiSystemSub)
 }
 
@@ -132,20 +141,133 @@ func (s *Server) reportVMs(w http.ResponseWriter, r *http.Request) {
 			State: x.State, VCPU: x.VCPU, RamMB: x.RamMB, GuestOS: x.GuestOS})
 	}
 	s.st.ReplaceVMs(sysID, rows)
-	// 對帳：label==vm name 的 system → LinkVM
+
+	// Reconcile: match each VM to a registered system.
+	// Priority: (1) UUID match (with SMBIOS endian swap), (2) exact label==vm.Name, (3) loose name contains.
 	systems, _ := s.st.ListSystems()
-	byLabel := map[string]string{}
-	for _, x := range systems {
-		byLabel[x.Label] = x.ID
-	}
+
 	linked := 0
 	for _, vm := range rows {
-		if gid, ok := byLabel[vm.Name]; ok && gid != sysID {
-			s.st.LinkVM(sysID, vm.UUID, gid)
+		// Skip self (the host reporting VMs cannot be its own guest).
+		// Also skip VMs with no UUID and no name to match.
+
+		var guestID string
+
+		// Priority 1: UUID match
+		if vm.UUID != "" {
+			for _, sys := range systems {
+				if sys.ID == sysID {
+					continue // skip host
+				}
+				if sys.MachineUUID != "" && store.UUIDMatch(vm.UUID, sys.MachineUUID) {
+					guestID = sys.ID
+					break
+				}
+			}
+		}
+
+		// Priority 2: exact label == vm.Name
+		if guestID == "" && vm.Name != "" {
+			for _, sys := range systems {
+				if sys.ID == sysID {
+					continue
+				}
+				if sys.Label == vm.Name {
+					guestID = sys.ID
+					break
+				}
+			}
+		}
+
+		// Priority 3: loose name — normalise both, check containment, require len>=4
+		if guestID == "" && vm.Name != "" {
+			lvm := looseName(vm.Name)
+			if len(lvm) >= 4 {
+				for _, sys := range systems {
+					if sys.ID == sysID {
+						continue
+					}
+					lsys := looseName(sys.Label)
+					if len(lsys) >= 4 && (strings.Contains(lvm, lsys) || strings.Contains(lsys, lvm)) {
+						guestID = sys.ID
+						break
+					}
+				}
+			}
+		}
+
+		if guestID != "" {
+			s.st.LinkVM(sysID, vm.UUID, guestID)
 			linked++
 		}
 	}
 	writeJSON(w, 200, map[string]int{"applied": len(rows), "linked": linked})
+}
+
+// apiVMSub handles /api/vms/{hostSystemID}/{uuid}/link and /api/vms/{hostSystemID}/{uuid} DELETE (unlink).
+func (s *Server) apiVMSub(w http.ResponseWriter, r *http.Request) {
+	// Path: /api/vms/{hostSystemID}/{uuid}/link  or  /api/vms/{hostSystemID}/{uuid}
+	path := strings.TrimPrefix(r.URL.Path, "/api/vms/")
+	parts := strings.SplitN(path, "/", 3)
+	if len(parts) < 2 {
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	hostID := parts[0]
+	uuid := parts[1]
+	sub := ""
+	if len(parts) == 3 {
+		sub = parts[2]
+	}
+
+	switch {
+	case sub == "link" && r.Method == http.MethodPost:
+		// POST /api/vms/{hostSystemID}/{uuid}/link  body: {"system_id":"..."}
+		var body struct {
+			SystemID string `json:"system_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.SystemID == "" {
+			writeJSON(w, 400, map[string]string{"error": "bad json or missing system_id"})
+			return
+		}
+		// Verify host system and VM exist.
+		if _, err := s.st.SystemByID(hostID); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "host system not found"})
+			return
+		}
+		if _, err := s.st.VMByHostAndUUID(hostID, uuid); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "vm not found"})
+			return
+		}
+		if _, err := s.st.SystemByID(body.SystemID); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "target system not found"})
+			return
+		}
+		if err := s.st.LinkVM(hostID, uuid, body.SystemID); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, map[string]bool{"ok": true})
+
+	case sub == "link" && r.Method == http.MethodDelete:
+		// DELETE /api/vms/{hostSystemID}/{uuid}/link  → unlink
+		if _, err := s.st.SystemByID(hostID); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "host system not found"})
+			return
+		}
+		if _, err := s.st.VMByHostAndUUID(hostID, uuid); err != nil {
+			writeJSON(w, 404, map[string]string{"error": "vm not found"})
+			return
+		}
+		if err := s.st.UnlinkVM(hostID, uuid); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
+		w.WriteHeader(204)
+
+	default:
+		writeJSON(w, 404, map[string]string{"error": "not found"})
+	}
 }
 
 // ── Browser-side Monitor API ─────────────────────────────────────────────────

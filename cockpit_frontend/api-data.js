@@ -200,45 +200,58 @@ async function loadAll() {
 
         spark:    Array.isArray(sys.spark) && sys.spark.length ? sys.spark : null,
         warnings: computeWarnings(sys),
+        kind:     sys.kind || "physical",
+        host_id:  sys.host_id || null,
       };
     });
 
-    /* ── VMs：linked → role 前綴；unlinked → pending 卡 ── */
+    /* ── VMs：linked → role 前綴；unlinked → pending 卡（含手動連結 UI）── */
+    // vmsByLinkedSystem: linked_system_id → raw vm object (for host lookup in topo.js)
+    window._vmsByLinkedSystem = {};
     if (Array.isArray(vms)) {
       vms.forEach((vm) => {
-        // 找 host 機器的 label
-        const hostSys = systems.find((s) => s.id === vm.host_id);
-        const hostLabel = hostSys ? hostSys.label : (vm.host_id || "未知主機");
+        // API field names: host_system_id, linked_system_id
+        const hostSys = systems.find((s) => s.id === vm.host_system_id);
+        const hostLabel = hostSys ? hostSys.label : (vm.host_system_id || "未知主機");
 
-        if (vm.linked && MACHINE_META[vm.id]) {
-          // linked VM 已在 systems 裡，補充 role
-          const existing = MACHINE_META[vm.id];
-          const vmRole = existing.role ? `VM @ ${hostLabel}` : `VM @ ${hostLabel}`;
-          MACHINE_META[vm.id] = { ...existing, role: vmRole };
-        } else if (!vm.linked) {
-          // unlinked VM → pending 機器卡
-          const pendingId = "vm_" + (vm.uuid || vm.id);
+        if (vm.linked_system_id && MACHINE_META[vm.linked_system_id]) {
+          // linked VM 已在 systems 裡，補充 role，記錄 host mapping
+          const existing = MACHINE_META[vm.linked_system_id];
+          MACHINE_META[vm.linked_system_id] = { ...existing, role: `VM @ ${hostLabel}` };
+          window._vmsByLinkedSystem[vm.linked_system_id] = vm;
+        } else if (!vm.linked_system_id) {
+          // unlinked VM → pending 機器卡，附帶原始 vm 資料供手動連結
+          const pendingId = "vm_" + (vm.uuid || vm.host_system_id);
           if (!MACHINE_META[pendingId]) {
             MACHINE_META[pendingId] = {
-              label:        vm.name || pendingId,
-              role:         "未連線 VM @ " + hostLabel,
-              os:           vm.guest_os || "—",
-              arch:         "—",
-              status:       "pending",
+              label:           vm.name || pendingId,
+              role:            "未連線 VM @ " + hostLabel,
+              os:              vm.guest_os || "—",
+              arch:            "—",
+              status:          "pending",
               cpu: null, mem: null, disk: null, gpu: null, temp: null,
               net: null, load: null,
-              uptime:       "—",
-              agent:        "—",
-              agent_status: "pending",
-              last_seen:    null,
-              spark:        null,
-              warnings:     ["等待 agent 連線"],
+              uptime:          "—",
+              agent:           "—",
+              agent_status:    "pending",
+              last_seen:       null,
+              spark:           null,
+              warnings:        ["等待 agent 連線"],
+              // 記錄原始 vm 供連結操作
+              _vmRaw:          { host_system_id: vm.host_system_id, uuid: vm.uuid },
             };
             MACHINE_ORDER.push(pendingId);
           }
         }
       });
     }
+
+    // Build a set of physical systems already linked to a VM (for link dropdown filtering)
+    window._linkedSystemIDs = new Set(
+      (vms || []).filter((v) => v.linked_system_id).map((v) => v.linked_system_id)
+    );
+    // Expose raw systems list for the link dropdown
+    window._allSystems = systems;
 
     /* ── INSTALLS（形狀與 mock-data.js 相同）── */
     const INSTALLS = Array.isArray(installs) ? installs.map((r) => ({

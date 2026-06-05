@@ -25,6 +25,7 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		AgentVersion string `json:"agent_version"`
 		EnrollSecret string `json:"enroll_secret"`
 		EnrollToken  string `json:"enroll_token"`
+		MachineUUID  string `json:"machine_uuid"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
@@ -43,9 +44,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 401, map[string]string{"error": "enroll token already used"})
 			return
 		}
-		// Update agent_version if provided
-		if body.AgentVersion != "" {
-			s.st.HeartbeatByID(sys.ID, body.AgentVersion)
+		// Update agent_version and machine_uuid if provided
+		if body.AgentVersion != "" || body.MachineUUID != "" {
+			s.st.HeartbeatByID(sys.ID, body.AgentVersion, body.MachineUUID)
 		}
 		writeJSON(w, 200, map[string]string{"system_id": sys.ID, "agent_token": agentToken})
 		return
@@ -64,6 +65,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
+	}
+	// Store machine_uuid from enroll if provided.
+	if body.MachineUUID != "" {
+		s.st.SetMachineUUID(id, body.MachineUUID)
 	}
 	writeJSON(w, 200, map[string]string{"system_id": id, "agent_token": token})
 }
@@ -92,9 +97,10 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		AgentVersion string `json:"agent_version"`
+		MachineUUID  string `json:"machine_uuid"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	if err := s.st.HeartbeatByID(sysID, body.AgentVersion); err != nil {
+	if err := s.st.HeartbeatByID(sysID, body.AgentVersion, body.MachineUUID); err != nil {
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}

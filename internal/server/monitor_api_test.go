@@ -144,3 +144,142 @@ func TestReportVMsAndReconcile(t *testing.T) {
 	}
 	_ = store.ServiceRow{} // keep import
 }
+
+// TestReconcileUUIDPath verifies that reportVMs links via SMBIOS-swapped machine UUID.
+// Uses real pair from the plan: vmx "564d98e4399f8e80-a3ec5a13a0a490f5" ↔ guest "E4984D56-9F39-808E-A3EC-5A13A0A490F5".
+func TestReconcileUUIDPath(t *testing.T) {
+	srv, st := newTestServer(t)
+
+	// Enroll host with a systems token.
+	hostID, hostTok, _ := st.RegisterSystem("minihost", "darwin", "arm64")
+
+	// Enroll guest system with the guest OS UUID (as a real agent would send).
+	guestID, _, _ := st.RegisterSystem("home-service-vm", "linux", "amd64")
+	guestUUID := "E4984D56-9F39-808E-A3EC-5A13A0A490F5"
+	if err := st.SetMachineUUID(guestID, guestUUID); err != nil {
+		t.Fatalf("SetMachineUUID: %v", err)
+	}
+
+	// Host reports VMs with the VMX bios UUID (little-endian encoded).
+	vmxUUID := "564d98e4399f8e80-a3ec5a13a0a490f5"
+	rec := postJSON(t, srv, "/api/agent/report-vms", hostTok,
+		`[{"name":"home-service-vm","uuid":"`+vmxUUID+`","state":"running"}]`)
+	if rec.Code != 200 {
+		t.Fatalf("report-vms: %d %s", rec.Code, rec.Body.String())
+	}
+
+	vms, _ := st.ListVMs()
+	if len(vms) == 0 {
+		t.Fatal("no VMs stored")
+	}
+	if vms[0].LinkedSystemID != guestID {
+		t.Errorf("UUID reconcile: want linkedSystemID=%q got %q (body=%s)", guestID, vms[0].LinkedSystemID, rec.Body.String())
+	}
+
+	// Verify guest system is now marked as vm with correct host.
+	sys, _ := st.SystemByID(guestID)
+	if sys.Kind != "vm" || sys.HostID != hostID {
+		t.Errorf("guest system: kind=%q host_id=%q", sys.Kind, sys.HostID)
+	}
+}
+
+// TestReconcileLooseNamePath verifies loose-name matching (curtishomeservice ⊃ homeservice).
+func TestReconcileLooseNamePath(t *testing.T) {
+	srv, st := newTestServer(t)
+
+	// Enroll host.
+	_, hostTok, _ := st.RegisterSystem("minihost", "darwin", "arm64")
+
+	// Guest registered as "home-service" (no UUID yet, simulates old agent).
+	guestID, _, _ := st.RegisterSystem("home-service", "linux", "amd64")
+
+	// Host reports VM named "CurtisHomeService" — loose match: curtishomeservice ⊃ homeservice.
+	rec := postJSON(t, srv, "/api/agent/report-vms", hostTok,
+		`[{"name":"CurtisHomeService","uuid":"bbbb-cccc","state":"running"}]`)
+	if rec.Code != 200 {
+		t.Fatalf("report-vms: %d %s", rec.Code, rec.Body.String())
+	}
+
+	vms, _ := st.ListVMs()
+	if len(vms) == 0 {
+		t.Fatal("no VMs stored")
+	}
+	if vms[0].LinkedSystemID != guestID {
+		t.Errorf("loose-name reconcile: want %q got %q", guestID, vms[0].LinkedSystemID)
+	}
+}
+
+// TestVMLinkUnlinkEndpoints verifies the manual link/unlink HTTP endpoints.
+func TestVMLinkUnlinkEndpoints(t *testing.T) {
+	srv, st := newTestServer(t)
+
+	// Create host system and a VM.
+	hostID, hostTok, _ := st.RegisterSystem("minihost", "darwin", "arm64")
+	postJSON(t, srv, "/api/agent/report-vms", hostTok,
+		`[{"name":"test-vm","uuid":"vm-uuid-1","state":"running"}]`)
+
+	// Create a physical guest system to link to.
+	guestID, _, _ := st.RegisterSystem("my-vm-guest", "linux", "amd64")
+
+	// POST /api/vms/{hostID}/{uuid}/link → 200 {ok:true}
+	linkRec := postJSON(t, srv, "/api/vms/"+hostID+"/vm-uuid-1/link", "",
+		`{"system_id":"`+guestID+`"}`)
+	if linkRec.Code != 200 {
+		t.Fatalf("link: %d %s", linkRec.Code, linkRec.Body.String())
+	}
+	if !strings.Contains(linkRec.Body.String(), `"ok":true`) {
+		t.Fatalf("link body: %s", linkRec.Body.String())
+	}
+
+	// Verify linked.
+	vms, _ := st.ListVMs()
+	var linked string
+	for _, v := range vms {
+		if v.UUID == "vm-uuid-1" {
+			linked = v.LinkedSystemID
+		}
+	}
+	if linked != guestID {
+		t.Fatalf("after link: linkedSystemID=%q want %q", linked, guestID)
+	}
+
+	// Verify guest system is now vm kind.
+	gs, _ := st.SystemByID(guestID)
+	if gs.Kind != "vm" || gs.HostID != hostID {
+		t.Fatalf("guest system after link: kind=%q host_id=%q", gs.Kind, gs.HostID)
+	}
+
+	// DELETE /api/vms/{hostID}/{uuid}/link → 204
+	delReq := httptest.NewRequest("DELETE", "/api/vms/"+hostID+"/vm-uuid-1/link", nil)
+	delRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(delRec, delReq)
+	if delRec.Code != 204 {
+		t.Fatalf("unlink: %d %s", delRec.Code, delRec.Body.String())
+	}
+
+	// Verify unlinked.
+	vms2, _ := st.ListVMs()
+	for _, v := range vms2 {
+		if v.UUID == "vm-uuid-1" && v.LinkedSystemID != "" {
+			t.Fatalf("after unlink: linkedSystemID still set: %q", v.LinkedSystemID)
+		}
+	}
+
+	// Verify guest system restored to physical.
+	gs2, _ := st.SystemByID(guestID)
+	if gs2.Kind != "physical" || gs2.HostID != "" {
+		t.Fatalf("guest system after unlink: kind=%q host_id=%q", gs2.Kind, gs2.HostID)
+	}
+
+	// 404 for unknown host.
+	rec404 := postJSON(t, srv, "/api/vms/no-such-host/vm-uuid-1/link", "", `{"system_id":"`+guestID+`"}`)
+	if rec404.Code != 404 {
+		t.Fatalf("link unknown host: %d", rec404.Code)
+	}
+
+	// 404 for unknown VM.
+	rec404vm := postJSON(t, srv, "/api/vms/"+hostID+"/no-such-uuid/link", "", `{"system_id":"`+guestID+`"}`)
+	if rec404vm.Code != 404 {
+		t.Fatalf("link unknown vm: %d", rec404vm.Code)
+	}
+}

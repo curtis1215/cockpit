@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS systems (
   last_seen     TEXT NOT NULL DEFAULT '',
   agent_token   TEXT UNIQUE,
   enroll_token  TEXT UNIQUE,
-  created       INTEGER NOT NULL
+  created       INTEGER NOT NULL,
+  machine_uuid  TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS versions (
   software TEXT NOT NULL, version TEXT NOT NULL, released_at TEXT,

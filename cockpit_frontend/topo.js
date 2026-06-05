@@ -153,6 +153,86 @@
   /* ============================================================
      render 節點
      ============================================================ */
+  /* ============================================================
+     VM 手動連結 Dropdown Overlay
+     ============================================================ */
+  let linkOverlay = null;
+  function closeLinkOverlay() {
+    if (linkOverlay) { linkOverlay.remove(); linkOverlay = null; }
+  }
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeLinkOverlay(); });
+
+  function openLinkOverlay(anchorEl, pendingId) {
+    closeLinkOverlay();
+    const m = MACHINE_META[pendingId];
+    if (!m || !m._vmRaw) return;
+    const { host_system_id, uuid } = m._vmRaw;
+
+    // Build list of physical systems not yet linked to a VM
+    const allSystems = window._allSystems || [];
+    const linkedIDs = window._linkedSystemIDs || new Set();
+    const candidates = allSystems.filter(
+      (s) => s.kind === "physical" && !linkedIDs.has(s.id)
+    );
+
+    const overlay = document.createElement("div");
+    overlay.style.cssText = `position:fixed; inset:0; z-index:9998;`;
+    overlay.addEventListener("click", closeLinkOverlay);
+
+    const rect = anchorEl.getBoundingClientRect();
+    const menu = document.createElement("div");
+    menu.style.cssText = `position:fixed; z-index:9999; left:${rect.left}px; top:${rect.bottom + 6}px;
+      min-width:220px; max-width:300px; background:var(--surface); border:1px solid var(--border-2);
+      border-radius:10px; box-shadow:0 8px 32px rgba(0,0,0,.28); padding:6px 0; font-size:13px;`;
+    menu.addEventListener("click", (e) => e.stopPropagation());
+
+    if (candidates.length === 0) {
+      menu.innerHTML = `<div style="padding:10px 14px; color:var(--text-3); font-size:12px;">無可連結的 physical system</div>`;
+    } else {
+      menu.innerHTML = `<div style="padding:6px 14px 4px; font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em;">選擇要連結的機器</div>` +
+        candidates.map((s) =>
+          `<button data-link-sys="${s.id}" style="display:block; width:100%; text-align:left; padding:8px 14px; border:none; background:none; color:var(--text); cursor:pointer; transition:.1s;"
+            onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='none'">
+            ${s.label} <span style="color:var(--text-3); font-size:11px;">${s.id}</span>
+          </button>`
+        ).join("");
+    }
+
+    menu.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-link-sys]");
+      if (!btn) return;
+      const systemId = btn.dataset.linkSys;
+      try {
+        const res = await fetch(`/api/vms/${host_system_id}/${uuid}/link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ system_id: systemId }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      } catch (err) {
+        alert("連結失敗：" + err.message);
+      }
+      closeLinkOverlay();
+      // Reload data to reflect the link.
+      window.dispatchEvent(new Event("topo:refresh-data"));
+    });
+
+    overlay.appendChild(menu);
+    document.body.appendChild(overlay);
+    linkOverlay = overlay;
+  }
+
+  // Listen for the data-refresh trigger (fired after manual link/unlink).
+  window.addEventListener("topo:refresh-data", async () => {
+    // Re-run loadAll (api-data.js exports loadAll into window if needed, else reload page).
+    if (window._reloadTopoData) {
+      await window._reloadTopoData();
+      window.dispatchEvent(new Event("topo:refresh"));
+    } else {
+      location.reload();
+    }
+  });
+
   function machineNode(id) {
     const m = MACHINE_META[id];
     const h = machineHealth(id);
@@ -180,8 +260,14 @@
       : m.agent_status === "pending"
       ? `<span class="badge b-mut">未連線</span>`
       : `<span class="tag">agent ${m.agent}</span>`;
+    // 未連線 VM pending 卡：加連結按鈕
+    const linkBtn = (h === "pending" && m._vmRaw)
+      ? `<button class="vm-link-btn" data-link-vm="${id}"
+           style="font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; flex:none; transition:.14s;"
+           >連結</button>`
+      : "";
     const foot = h === "pending"
-      ? `<div class="m-foot"><span class="badge b-mut">等待連線</span><span>尚未回報</span>${agentBadge}</div>`
+      ? `<div class="m-foot"><span class="badge b-mut">等待連線</span><span>尚未回報</span>${agentBadge}${linkBtn}</div>`
       : offline
       ? `<div class="m-foot"><span class="badge b-err">離線</span><span>最後回報 ${m.last_seen}</span>${agentBadge}</div>`
       : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span><span>${svcCount} 服務</span>${m.temp!=null?`<span>·</span><span>${m.temp}°C</span>`:""}</div>`;
@@ -371,6 +457,13 @@
   });
   topo.addEventListener("mouseout", (e) => { if (e.target.closest(".node") && !pinned) clearHighlight(); });
   topo.addEventListener("click", (e) => {
+    // VM 連結按鈕：阻止冒泡，開 dropdown overlay
+    const linkBtn = e.target.closest("[data-link-vm]");
+    if (linkBtn) {
+      e.stopPropagation();
+      openLinkOverlay(linkBtn, linkBtn.dataset.linkVm);
+      return;
+    }
     // 收起/展開按鈕：阻止冒泡，不開詳情
     const colBtn = e.target.closest("[data-collapse-machine]");
     if (colBtn) {
@@ -450,9 +543,16 @@
       ? `<span class="badge b-warn">agent ${m.agent} · 有新版</span>`
       : m.agent_status === "stale" ? `<span class="badge b-err">agent 失聯</span>`
       : `<span class="badge b-ok">agent ${m.agent}</span>`;
+    const vmChip = (m.kind === "vm" && m.host_id)
+      ? (() => {
+          const hostMeta = MACHINE_META[m.host_id];
+          const hostLabel = hostMeta ? hostMeta.label : m.host_id;
+          return `<span class="badge b-mut" style="font-size:12px;">VM @ ${hostLabel}</span>`;
+        })()
+      : "";
     $("#drawer-body").innerHTML = `
       <div style="display:flex; gap:8px; align-items:center; margin-bottom:14px; flex-wrap:wrap;">
-        <span class="tag">${m.os}</span><span class="tag">${m.arch}</span>${agentLine}
+        <span class="tag">${m.os}</span><span class="tag">${m.arch}</span>${agentLine}${vmChip}
       </div>
       ${big}
       <div style="font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--text-3); margin-bottom:8px;">運行的服務 (${svc.length})</div>

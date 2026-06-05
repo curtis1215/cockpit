@@ -239,6 +239,39 @@ func (s *Store) LinkVM(hostSystemID, uuid, guestSystemID string) error {
 	return err
 }
 
+// UnlinkVM：手動取消連結——清除 vms.linked_system_id，把 guest system 還原為 kind=physical + host_id=NULL。
+func (s *Store) UnlinkVM(hostSystemID, uuid string) error {
+	// Find linked_system_id before clearing it.
+	var linkedID sql.NullString
+	s.db.QueryRow(`SELECT linked_system_id FROM vms WHERE host_system_id=? AND uuid=?`, hostSystemID, uuid).Scan(&linkedID)
+	if _, err := s.db.Exec(`UPDATE vms SET linked_system_id=NULL WHERE host_system_id=? AND uuid=?`, hostSystemID, uuid); err != nil {
+		return err
+	}
+	if linkedID.Valid && linkedID.String != "" {
+		_, err := s.db.Exec(`UPDATE systems SET kind='physical', host_id=NULL WHERE id=?`, linkedID.String)
+		return err
+	}
+	return nil
+}
+
+// VMByHostAndUUID looks up a single VM row.
+func (s *Store) VMByHostAndUUID(hostSystemID, uuid string) (VMRow, error) {
+	var r VMRow
+	var vmx, gos, link sql.NullString
+	var vcpu, ram sql.NullInt64
+	err := s.db.QueryRow(`SELECT host_system_id,name,uuid,vmx_path,state,vcpu,ram_mb,guest_os,linked_system_id FROM vms WHERE host_system_id=? AND uuid=?`, hostSystemID, uuid).
+		Scan(&r.HostSystemID, &r.Name, &r.UUID, &vmx, &r.State, &vcpu, &ram, &gos, &link)
+	if err == sql.ErrNoRows {
+		return VMRow{}, ErrNotFound
+	}
+	if err != nil {
+		return VMRow{}, err
+	}
+	r.VmxPath, r.GuestOS, r.LinkedSystemID = vmx.String, gos.String, link.String
+	r.VCPU, r.RamMB = int(vcpu.Int64), int(ram.Int64)
+	return r, nil
+}
+
 // 聚合層級：dst ← src，bucket 秒數與保留秒數。
 var dsLevels = []struct {
 	Dst, Src  string
