@@ -105,7 +105,8 @@ func (c *Collector) Collect() (Metrics, error) {
 	if temps, err := sensors.SensorsTemperatures(); err == nil && len(temps) > 0 {
 		var maxTemp float64
 		for _, t := range temps {
-			if t.Temperature > maxTemp {
+			// 合理性防衛：虛擬機/故障感測器常回報荒謬值（實測 VMware guest 回 11758.9）
+			if t.Temperature > maxTemp && t.Temperature > 0 && t.Temperature < 150 {
 				maxTemp = t.Temperature
 			}
 		}

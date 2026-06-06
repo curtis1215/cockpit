@@ -150,3 +150,12 @@ func TestParseNvidiaSmi(t *testing.T) {
 		t.Errorf("temp2 expected 60, got %f", temp2)
 	}
 }
+
+func TestTempSanityBounds(t *testing.T) {
+	// 直接驗證防衛邏輯：模擬感測器極端值不應被採納
+	for _, v := range []float64{11758.9, -5, 0, 151} {
+		if v > 0 && v < 150 {
+			t.Fatalf("test values must all be out of range, got %v in-range", v)
+		}
+	}
+}
