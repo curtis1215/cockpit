@@ -28,6 +28,7 @@ type Enumerator struct {
 	RunVmrun func() (string, error)
 	Glob     func() []string
 	ReadFile func(p string) (string, error)
+	RunOrb   func() (string, error) // 注入測試用；nil = 真實 orbctl
 }
 
 // vmrunOnce caches the resolved vmrun path so we only search once per process.
@@ -78,7 +79,7 @@ func ResolvedVmrun() string { return resolvedVmrunPath() }
 
 // New returns an Enumerator using real system calls.
 func New() *Enumerator {
-	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile}
+	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile, RunOrb: orbList}
 }
 
 func vmrunList() (string, error) {
@@ -114,6 +115,24 @@ func readFile(p string) (string, error) {
 // Enumerate returns all VMs by merging the vmrun running list and library paths.
 // Returns nil (not empty) when VMware is not available at all (vmrun error AND no .vmx paths found).
 func (e *Enumerator) Enumerate() ([]VM, error) {
+	vmware, err := e.enumerateVMware()
+	if err != nil {
+		return nil, err
+	}
+	// OrbStack 機器併入同一清單（RunOrb 可注入；nil 用真實 orbctl）。
+	var orb []VM
+	if e.RunOrb != nil {
+		if out, oerr := e.RunOrb(); oerr == nil {
+			orb = parseOrbList(out)
+		}
+	}
+	if vmware == nil && orb == nil {
+		return nil, nil
+	}
+	return append(vmware, orb...), nil
+}
+
+func (e *Enumerator) enumerateVMware() ([]VM, error) {
 	runningOut, vmrunErr := e.RunVmrun()
 	globPaths := e.Glob()
 

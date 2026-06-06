@@ -125,3 +125,39 @@ func TestFindVmrunReturnsEmptyWhenNoneFound(t *testing.T) {
 		t.Fatalf("expected empty string when not found, got %q", got)
 	}
 }
+
+func TestEnumerateOrbStack(t *testing.T) {
+	e := &Enumerator{
+		RunVmrun: func() (string, error) { return "", errNo{} },
+		Glob:     func() []string { return nil },
+		ReadFile: func(string) (string, error) { return "", errNo{} },
+		RunOrb: func() (string, error) {
+			return `[{"id":"01KT7A20P7","name":"test-runner","state":"running","image":{"distro":"ubuntu","version":"noble","arch":"arm64"}},{"id":"01XX","name":"old-box","state":"stopped","image":{"distro":"debian","version":"","arch":"arm64"}}]`, nil
+		},
+	}
+	vms, err := e.Enumerate()
+	if err != nil || len(vms) != 2 {
+		t.Fatalf("orb enumerate: %v %+v", err, vms)
+	}
+	if vms[0].Name != "test-runner" || vms[0].State != "running" || vms[0].UUID != "orb-01KT7A20P7" || vms[0].GuestOS != "ubuntu-noble" {
+		t.Fatalf("vm0: %+v", vms[0])
+	}
+	if vms[1].State != "stopped" || vms[1].GuestOS != "debian" {
+		t.Fatalf("vm1: %+v", vms[1])
+	}
+}
+
+func TestEnumerateBothSources(t *testing.T) {
+	e := &Enumerator{
+		RunVmrun: func() (string, error) { return "Total running VMs: 1\n/p/a.vmx\n", nil },
+		Glob:     func() []string { return []string{"/p/a.vmx"} },
+		ReadFile: func(string) (string, error) { return `displayName = "vmw-a"` + "\n", nil },
+		RunOrb: func() (string, error) {
+			return `[{"id":"01A","name":"orb-a","state":"running","image":{"distro":"ubuntu","version":"x","arch":"arm64"}}]`, nil
+		},
+	}
+	vms, _ := e.Enumerate()
+	if len(vms) != 2 {
+		t.Fatalf("both: %+v", vms)
+	}
+}
