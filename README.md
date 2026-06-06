@@ -156,6 +156,30 @@ software:
 
 ---
 
+## 軟體追蹤配置心法（工具鏈環境）
+
+agent 以系統服務（launchd/systemd）執行指令時，環境跟你的互動 shell **不同**：沒有
+`.zshrc`/homebrew PATH、沒有 `PNPM_HOME` 等變數。配置 `current_cmd` 與更新指令時依安裝方式套用：
+
+| 安裝方式 | current_cmd / 更新指令寫法 | 原因 |
+|---|---|---|
+| 原生安裝（如 claude-code） | 用**絕對路徑**：`/Users/<u>/.local/bin/claude --version` | 服務環境 PATH 沒有 `~/.local/bin`；勿用 `$HOME`（服務可能以其他身份跑） |
+| npm 全域（如 codex） | 前置 PATH：`PATH=/opt/homebrew/bin:$PATH /opt/homebrew/bin/codex --version` | npm launcher 的 shebang 是 `env node`，服務環境找不到 node |
+| pnpm 全域（如 openspec） | 再加 PNPM_HOME：`PNPM_HOME=~/Library/pnpm PATH=~/Library/pnpm:/opt/homebrew/bin:$PATH pnpm add -g <pkg>@latest` | pnpm 全域操作需要 `PNPM_HOME`，否則 `ERR_PNPM_NO_GLOBAL_BIN_DIR` |
+| uv tool（如 headroom） | 絕對路徑即可：`/Users/<u>/.local/bin/headroom --version`；更新 `/Users/<u>/.local/bin/uv tool upgrade <pkg>` | uv shim 自帶直譯器路徑 |
+| brew formula | `/opt/homebrew/bin/<bin> --version`；更新 `/opt/homebrew/bin/brew upgrade <formula>` | 同 PATH 原因 |
+
+實用驗證法：寫好指令先用**乾淨環境**模擬 agent 跑一次——
+
+```sh
+env -i HOME=$HOME bash -lc '<你的指令>'
+```
+
+跑得過才寫進配置。其它備註：
+
+- changelog 來源 `github:owner/repo` 會自動嘗試 `v<版本>`、`<版本>`，再 fallback 掃 release 清單比對 tag 內含版本字串（涵蓋 `rust-vX.Y.Z` 等非常規命名）
+- 服務以 root 跑時，使用者層工具（claude/codex 憑證、keychain）多半不可用——建議服務以一般使用者身份執行（macOS plist 加 `UserName`），並執行 `cockpit doctor` 體檢環境
+
 ## 開發
 
 ```sh
