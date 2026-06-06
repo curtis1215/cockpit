@@ -161,3 +161,81 @@ func TestEnumerateBothSources(t *testing.T) {
 		t.Fatalf("both: %+v", vms)
 	}
 }
+
+func TestEnumerateLibvirt(t *testing.T) {
+	dominfo := map[string]string{
+		"multica-sitruc": `Id:             1
+Name:           multica-sitruc
+UUID:           f3a4eea3-65fb-4483-b28a-e4dbfc2f8330
+OS Type:        hvm
+State:          running
+CPU(s):         4
+CPU time:       12345.6s
+Max memory:     16777216 KiB
+Used memory:    16777216 KiB
+Persistent:     yes
+Autostart:      enable
+`,
+		"old-vm": `Id:             -
+Name:           old-vm
+UUID:           11111111-2222-3333-4444-555555555555
+OS Type:        hvm
+State:          shut off
+CPU(s):         2
+Max memory:     4194304 KiB
+Persistent:     yes
+`,
+	}
+	e := &Enumerator{
+		RunVmrun: func() (string, error) { return "", errNo{} },
+		Glob:     func() []string { return nil },
+		ReadFile: func(string) (string, error) { return "", errNo{} },
+		RunVirsh: func(args ...string) (string, error) {
+			if args[0] == "list" {
+				return "multica-sitruc\nold-vm\n\n", nil
+			}
+			if args[0] == "dominfo" {
+				return dominfo[args[1]], nil
+			}
+			t.Fatalf("unexpected virsh args: %v", args)
+			return "", nil
+		},
+	}
+	vms, err := e.Enumerate()
+	if err != nil || len(vms) != 2 {
+		t.Fatalf("libvirt enumerate: %v %+v", err, vms)
+	}
+	v0 := vms[0]
+	if v0.Name != "multica-sitruc" || v0.State != "running" ||
+		v0.UUID != "f3a4eea3-65fb-4483-b28a-e4dbfc2f8330" || v0.VCPU != 4 || v0.RamMB != 16384 {
+		t.Fatalf("vm0: %+v", v0)
+	}
+	if vms[1].State != "stopped" || vms[1].RamMB != 4096 {
+		t.Fatalf("vm1: %+v", vms[1])
+	}
+}
+
+func TestEnumerateLibvirtUnavailable(t *testing.T) {
+	e := &Enumerator{
+		RunVmrun: func() (string, error) { return "", errNo{} },
+		Glob:     func() []string { return nil },
+		ReadFile: func(string) (string, error) { return "", errNo{} },
+		RunVirsh: func(args ...string) (string, error) { return "", errNo{} },
+	}
+	vms, err := e.Enumerate()
+	if err != nil || vms != nil {
+		t.Fatalf("expected nil,nil when no hypervisor: %v %+v", err, vms)
+	}
+}
+
+func TestFindVirshFallbackPath(t *testing.T) {
+	got := findVirsh(lookPathMiss, func(p string) error {
+		if p == "/usr/bin/virsh" {
+			return nil
+		}
+		return errNo{}
+	})
+	if got != "/usr/bin/virsh" {
+		t.Fatalf("findVirsh = %q", got)
+	}
+}

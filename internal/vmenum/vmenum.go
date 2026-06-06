@@ -28,7 +28,8 @@ type Enumerator struct {
 	RunVmrun func() (string, error)
 	Glob     func() []string
 	ReadFile func(p string) (string, error)
-	RunOrb   func() (string, error) // 注入測試用；nil = 真實 orbctl
+	RunOrb   func() (string, error)             // 注入測試用；nil = 真實 orbctl
+	RunVirsh func(args ...string) (string, error) // 注入測試用；nil = 真實 virsh
 }
 
 // vmrunOnce caches the resolved vmrun path so we only search once per process.
@@ -79,7 +80,7 @@ func ResolvedVmrun() string { return resolvedVmrunPath() }
 
 // New returns an Enumerator using real system calls.
 func New() *Enumerator {
-	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile, RunOrb: orbList}
+	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile, RunOrb: orbList, RunVirsh: virshRun}
 }
 
 func vmrunList() (string, error) {
@@ -126,10 +127,15 @@ func (e *Enumerator) Enumerate() ([]VM, error) {
 			orb = parseOrbList(out)
 		}
 	}
-	if vmware == nil && orb == nil {
+	// libvirt/KVM 機器併入同一清單（RunVirsh 可注入；nil 用真實 virsh）。
+	var lv []VM
+	if e.RunVirsh != nil {
+		lv = enumerateLibvirt(e.RunVirsh)
+	}
+	if vmware == nil && orb == nil && lv == nil {
 		return nil, nil
 	}
-	return append(vmware, orb...), nil
+	return append(append(vmware, orb...), lv...), nil
 }
 
 func (e *Enumerator) enumerateVMware() ([]VM, error) {

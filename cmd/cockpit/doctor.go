@@ -136,6 +136,9 @@ func checkVmrun(print func(string)) {
 	} else {
 		print("✅ vmrun：" + p)
 	}
+	if v := vmenum.ResolvedVirsh(); v != "" {
+		print("✅ virsh：" + v + "（libvirt/KVM 列舉啟用）")
+	}
 }
 
 // ── 5. 服務狀態 ───────────────────────────────────────────────────────────────
