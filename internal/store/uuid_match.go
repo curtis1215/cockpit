@@ -58,9 +58,9 @@ func smbiosSwap(hex32 string) string {
 	if len(hex32) != 32 {
 		return hex32
 	}
-	s := reverseHexBytes(hex32, 0, 4)  // group 1: bytes 0-3
-	s = reverseHexBytes(s, 4, 6)       // group 2: bytes 4-5
-	s = reverseHexBytes(s, 6, 8)       // group 3: bytes 6-7
+	s := reverseHexBytes(hex32, 0, 4) // group 1: bytes 0-3
+	s = reverseHexBytes(s, 4, 6)      // group 2: bytes 4-5
+	s = reverseHexBytes(s, 6, 8)      // group 3: bytes 6-7
 	return s
 }
 

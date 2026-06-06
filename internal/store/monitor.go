@@ -6,7 +6,7 @@ import (
 )
 
 type MetricRow struct {
-	TS                                          int64
+	TS                                                      int64
 	CPU, Mem, Disk, GPU, NetUp, NetDown, Load, Temp, Uptime *float64
 }
 type ServiceRow struct {
@@ -191,6 +191,20 @@ func (s *Store) ListServicesBySystem(systemID string) ([]ServiceRow, error) {
 }
 
 func (s *Store) ReplaceVMs(hostSystemID string, rows []VMRow) error {
+	// 保留既有手動/自動連結：以 (host,uuid) 帶過 linked_system_id（新回報不含連結資訊）。
+	existing := map[string]string{}
+	if cur, err := s.ListVMs(); err == nil {
+		for _, v := range cur {
+			if v.HostSystemID == hostSystemID && v.LinkedSystemID != "" {
+				existing[v.UUID] = v.LinkedSystemID
+			}
+		}
+	}
+	for i := range rows {
+		if rows[i].LinkedSystemID == "" {
+			rows[i].LinkedSystemID = existing[rows[i].UUID]
+		}
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err

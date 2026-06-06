@@ -243,8 +243,11 @@
     // Build list of physical systems not yet linked to a VM
     const allSystems = window._allSystems || [];
     const linkedIDs = window._linkedSystemIDs || new Set();
+    // 排除：已被連結者、宿主機本身（會自我循環）、任何 VM 宿主（不應被標成 VM）
+    const hostIDs = new Set(Object.values(MACHINE_META).filter((x) => x && x.kind === "vm" && x.host_id).map((x) => x.host_id));
+    if (host_system_id) hostIDs.add(host_system_id);
     const candidates = allSystems.filter(
-      (s) => s.kind === "physical" && !linkedIDs.has(s.id)
+      (s) => s.kind === "physical" && !linkedIDs.has(s.id) && !hostIDs.has(s.id)
     );
 
     const overlay = document.createElement("div");
@@ -261,7 +264,7 @@
     if (candidates.length === 0) {
       menu.innerHTML = `<div style="padding:10px 14px; color:var(--text-3); font-size:12px;">無可連結的 physical system</div>`;
     } else {
-      menu.innerHTML = `<div style="padding:6px 14px 4px; font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em;">選擇要連結的機器</div>` +
+      menu.innerHTML = `<div style="padding:6px 14px 4px; font-size:11px; color:var(--text-3); text-transform:uppercase; letter-spacing:.06em;">此 VM 內運行的機器是…</div>` +
         candidates.map((s) =>
           `<button data-link-sys="${s.id}" style="display:block; width:100%; text-align:left; padding:8px 14px; border:none; background:none; color:var(--text); cursor:pointer; transition:.1s;"
             onmouseover="this.style.background='var(--surface-2)'" onmouseout="this.style.background='none'">

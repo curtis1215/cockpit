@@ -33,7 +33,7 @@ func render(tmpl string, vars map[string]string) string {
 	return out
 }
 
-// shellQuote 單引號包裹（POSIX）：把 ' 換成 '\'' 。
+// shellQuote 單引號包裹（POSIX）：把 ' 換成 '\” 。
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

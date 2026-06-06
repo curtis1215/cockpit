@@ -10,11 +10,11 @@ import (
 )
 
 func (s *Server) registerVersionAPI() {
-	s.mux.HandleFunc("/api/installs", s.handleInstalls)     // GET list
-	s.mux.HandleFunc("/api/changelog/", s.handleChangelog)  // GET /api/changelog/{sw}/{ver}
-	s.mux.HandleFunc("/api/jobs", s.handleJobs)             // GET recent
-	s.mux.HandleFunc("/api/installs/", s.handleInstallSub)  // POST /api/installs/{sw}/{m}/update
-	s.mux.HandleFunc("/api/check", s.handleCheck)           // POST
+	s.mux.HandleFunc("/api/installs", s.handleInstalls)    // GET list
+	s.mux.HandleFunc("/api/changelog/", s.handleChangelog) // GET /api/changelog/{sw}/{ver}
+	s.mux.HandleFunc("/api/jobs", s.handleJobs)            // GET recent
+	s.mux.HandleFunc("/api/installs/", s.handleInstallSub) // POST /api/installs/{sw}/{m}/update
+	s.mux.HandleFunc("/api/check", s.handleCheck)          // POST
 	// NOTE: "/api/jobs/" (trailing slash) is registered ONCE in sse.go's registerSSE.
 }
 

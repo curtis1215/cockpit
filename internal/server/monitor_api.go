@@ -239,10 +239,26 @@ func (s *Server) apiVMSub(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 404, map[string]string{"error": "vm not found"})
 			return
 		}
-		if _, err := s.st.SystemByID(body.SystemID); err != nil {
+		target, err := s.st.SystemByID(body.SystemID)
+		if err != nil {
 			writeJSON(w, 404, map[string]string{"error": "target system not found"})
 			return
 		}
+		// 防呆：不可把 VM 連到宿主機本身（會把宿主標成自己的 VM、拓樸自我循環）。
+		if body.SystemID == hostID {
+			writeJSON(w, 400, map[string]string{"error": "不能連結到宿主機本身——此欄位指「VM 內運行的已註冊機器」"})
+			return
+		}
+		// 防呆：目標若本身是其它 VM 的宿主，也不應被標成 VM。
+		if vms, verr := s.st.ListVMs(); verr == nil {
+			for _, v := range vms {
+				if v.HostSystemID == body.SystemID {
+					writeJSON(w, 400, map[string]string{"error": "目標機器本身是 VM 宿主，不能標記為 VM"})
+					return
+				}
+			}
+		}
+		_ = target
 		if err := s.st.LinkVM(hostID, uuid, body.SystemID); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return

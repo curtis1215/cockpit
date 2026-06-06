@@ -44,8 +44,8 @@ func (s *Server) createSystem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, 200, map[string]string{
-		"id":          id,
-		"label":       body.Label,
+		"id":           id,
+		"label":        body.Label,
 		"enroll_token": enrollToken,
 	})
 }
@@ -169,13 +169,13 @@ func (s *Server) handleSoftwareSub(w http.ResponseWriter, r *http.Request) {
 
 // softwareBody is the POST /api/software request body.
 type softwareBody struct {
-	Name         string         `json:"name"`
-	Kind         string         `json:"kind"`
-	LatestSource string         `json:"latest_source"`
-	Changelog    string         `json:"changelog"`
-	Machine      string         `json:"machine"`
-	CurrentCmd   string         `json:"current_cmd"`
-	VersionRegex string         `json:"version_regex"`
+	Name         string          `json:"name"`
+	Kind         string          `json:"kind"`
+	LatestSource string          `json:"latest_source"`
+	Changelog    string          `json:"changelog"`
+	Machine      string          `json:"machine"`
+	CurrentCmd   string          `json:"current_cmd"`
+	VersionRegex string          `json:"version_regex"`
 	Update       *softwareUpdate `json:"update"`
 }
 

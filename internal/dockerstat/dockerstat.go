@@ -41,7 +41,7 @@ var (
 // The candidate list is the exported variable DockerCandidates to allow tests to
 // override it without patching os.Stat.
 var DockerCandidates = []string{
-	"/usr/local/bin/docker",   // OrbStack / Docker Desktop symlink
+	"/usr/local/bin/docker",    // OrbStack / Docker Desktop symlink
 	"/opt/homebrew/bin/docker", // Homebrew on Apple Silicon
 	"/usr/bin/docker",          // system fallback
 }
@@ -98,10 +98,10 @@ func execDocker(args ...string) (string, error) {
 //
 // Nil vs empty contract:
 //   - nil  → docker command failed (not installed, daemon down, etc.); caller
-//             should NOT report to the server, because we have no ground truth.
+//     should NOT report to the server, because we have no ground truth.
 //   - []Service{} (non-nil, len==0) → docker is healthy, zero containers are
-//             running; caller SHOULD POST the empty list so the server can clear
-//             any stale rows from a previous state.
+//     running; caller SHOULD POST the empty list so the server can clear
+//     any stale rows from a previous state.
 func (c *Collector) Collect() []Service {
 	psOut, err := c.Run("ps", "--format", `{{json .}}`)
 	if err != nil {
