@@ -239,6 +239,9 @@ async function loadAll() {
               warnings:        ["等待 agent 連線"],
               // 記錄原始 vm 供連結操作
               _vmRaw:          { host_system_id: vm.host_system_id, uuid: vm.uuid },
+              // host_id 供拓樸巢狀分群使用
+              host_id:         vm.host_system_id || null,
+              kind:            "vm",
             };
             MACHINE_ORDER.push(pendingId);
           }

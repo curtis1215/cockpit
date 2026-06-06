@@ -165,6 +165,32 @@
   .pop-in{animation:popIn .2s ease-out} @keyframes popIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
   .md p{margin:.3rem 0} .md ul{margin:.3rem 0;padding-left:1.05rem;list-style:disc} .md li{margin:.24rem 0}
   .md strong{color:var(--text);font-weight:650} .md code{font-family:"JetBrains Mono",monospace;font-size:.82em;background:var(--surface-2);padding:.04rem .28rem;border-radius:.25rem;border:1px solid var(--border)}
+
+  /* ---- host-vm-block：機器欄的渲染包裹容器 ---- */
+  .host-vm-block { display:flex; flex-direction:column; }
+
+  /* ---- VM 巢狀卡片 ---- */
+  .vm-tag { display:inline-flex; align-items:center; font-size:9.5px; font-weight:600;
+    padding:.08rem .32rem; border-radius:4px; background:#22304d; color:#9fb3da;
+    letter-spacing:.03em; flex:none; }
+  html:not(.dark) .vm-tag { background:#dce8f8; color:#2755a0; }
+
+  /* VM 群組包裹容器：提供左側垂直線 */
+  .vm-group { position:relative; margin-top:8px; padding-left:26px; display:flex; flex-direction:column; gap:8px; }
+  .vm-group::before {
+    content:""; position:absolute; left:10px; top:0; bottom:0;
+    width:1.5px; background:var(--border);
+  }
+  /* 每張 VM 卡左側水平橫線 */
+  .vm-card-wrap { position:relative; }
+  .vm-card-wrap::before {
+    content:""; position:absolute; left:-16px; top:50%; transform:translateY(-50%);
+    width:14px; height:1.5px; background:var(--border);
+  }
+  /* 未連結 VM：虛線邊框 + 低透明度 */
+  .vm-card-wrap.vm-pending > .m-node {
+    border-style: dashed; opacity: 0.75;
+  }
 </style>
 </head>
 

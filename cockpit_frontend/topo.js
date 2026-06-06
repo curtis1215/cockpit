@@ -10,6 +10,64 @@
   const $ = (s, r = document) => r.querySelector(s);
   const SVGNS = "http://www.w3.org/2000/svg";
 
+  /* ---- VM 分群輔助 ----
+   * buildVmGroups()：每次 render 時重新計算，支援 _reloadTopoData 刷新。
+   * 回傳 { vmsByHost, orphanVMs, vmIds }
+   *   vmsByHost[hostId] = { linked: [id,...], unlinked: [id,...] }
+   *   所有 kind==="vm" 且 host_id 在 MACHINE_META 的，歸到對應 host。
+   *   host 不在清單裡的 VM → orphanVMs（正常渲染，不巢狀）。
+   */
+  function buildVmGroups() {
+    const vmsByHost = {};
+    const orphanVMs = [];
+    const vmIds = new Set();
+    MACHINE_ORDER.forEach((id) => {
+      const m = MACHINE_META[id];
+      if (!m || m.kind !== "vm") return;
+      vmIds.add(id);
+      const hid = m.host_id;
+      if (hid && MACHINE_META[hid]) {
+        if (!vmsByHost[hid]) vmsByHost[hid] = { linked: [], unlinked: [] };
+        if (m.status === "pending") {
+          vmsByHost[hid].unlinked.push(id);
+        } else {
+          vmsByHost[hid].linked.push(id);
+        }
+      } else {
+        orphanVMs.push(id);
+      }
+    });
+    return { vmsByHost, orphanVMs, vmIds };
+  }
+
+  /* 快取（每次 renderAll 更新）*/
+  let vmsByHost = {}, orphanVMs = [], vmIds = new Set();
+
+  /* 渲染時用的機器排序：host + 其 VMs，再非 VM 主機，再孤兒 VM */
+  function buildRenderOrder() {
+    ({ vmsByHost, orphanVMs, vmIds } = buildVmGroups());
+    const order = [];
+    const nonVmHosts = MACHINE_ORDER.filter((id) => !vmIds.has(id));
+    nonVmHosts.forEach((id) => {
+      order.push({ id, role: "host" });
+      const grp = vmsByHost[id];
+      if (grp) {
+        grp.linked.forEach((vid) => order.push({ id: vid, role: "vm-linked" }));
+        grp.unlinked.forEach((vid) => order.push({ id: vid, role: "vm-unlinked" }));
+      }
+    });
+    orphanVMs.forEach((id) => order.push({ id, role: "orphan-vm" }));
+    return order;
+  }
+
+  /** 給定一個 machineId，判斷它是否因為 host 收起而應隱藏 */
+  function isHiddenViaHost(machineId) {
+    const m = MACHINE_META[machineId];
+    if (!m || m.kind !== "vm") return false;
+    const hid = m.host_id;
+    return !!(hid && collapsedMachines.has(hid));
+  }
+
   const installById = Object.fromEntries(INSTALLS.map((i) => [i.id, i]));
 
   /* ---- 排序：服務依機器順序，軟體依服務順序（降低連線交叉）---- */
@@ -99,21 +157,23 @@
   }
 
   /** 某個軟體節點是否應該隱藏：
-   *  所有連到它的服務，所屬機器全部都已收起，才隱藏。
+   *  所有連到它的服務，所屬機器全部都已收起（含 host 收起導致 VM 隱藏），才隱藏。
    *  若有任何一台展開的機器的服務連到它，就保持可見。
    */
   function softwareShouldHide(installId) {
     const ownerSvcs = services.filter((s) => s.software.includes(installId));
     if (ownerSvcs.length === 0) return false; // 無連線軟體不隱藏
-    return ownerSvcs.every((s) => collapsedMachines.has(s.machine));
+    return ownerSvcs.every((s) =>
+      collapsedMachines.has(s.machine) || isHiddenViaHost(s.machine)
+    );
   }
 
   /** 套用摺疊可見性（renderAll 後呼叫）*/
   function applyCollapse() {
-    // 服務節點
+    // 服務節點：machine 自身收起 或 所屬 VM 被 host 收起
     document.querySelectorAll(".s-node").forEach((el) => {
       const machine = el.dataset.machine;
-      el.style.display = collapsedMachines.has(machine) ? "none" : "";
+      el.style.display = (collapsedMachines.has(machine) || isHiddenViaHost(machine)) ? "none" : "";
     });
     // 軟體節點
     document.querySelectorAll(".w-node").forEach((el) => {
@@ -121,7 +181,17 @@
       const installId = key.slice(2);
       el.style.display = softwareShouldHide(installId) ? "none" : "";
     });
-    // 更新每張機器卡的收起摘要行
+    // VM 群組包裹容器 + 其中的 m-node：host 收起時整組隱藏
+    document.querySelectorAll(".vm-group").forEach((el) => {
+      const hostId = el.dataset.hostId;
+      const hide = !!(hostId && collapsedMachines.has(hostId));
+      el.style.display = hide ? "none" : "";
+      // 同時對每張 VM m-node 設 display，讓 drawEdges 的 display:none 判斷正常運作
+      el.querySelectorAll(".m-node").forEach((mn) => {
+        mn.style.display = hide ? "none" : "";
+      });
+    });
+    // 更新每張機器卡的收起摘要行（僅 host 卡，非 VM）
     document.querySelectorAll(".m-node").forEach((el) => {
       const id = el.dataset.machine;
       const summary = el.querySelector(".m-collapse-summary");
@@ -266,25 +336,35 @@
            style="font-size:11px; padding:2px 8px; border-radius:6px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; flex:none; transition:.14s;"
            >連結</button>`
       : "";
+    // VM tag（此機器是 VM）
+    const vmTag = (m.kind === "vm")
+      ? `<span class="vm-tag">VM</span>` : "";
+    // host 的 VM 數量（用於 footer chip 及收起摘要）
+    const hostVmGrp = vmsByHost[id];
+    const vmCount = hostVmGrp ? (hostVmGrp.linked.length + hostVmGrp.unlinked.length) : 0;
+    const vmChipStr = vmCount > 0 ? `<span>${vmCount} VM</span><span>·</span>` : "";
     const foot = h === "pending"
       ? `<div class="m-foot"><span class="badge b-mut">等待連線</span><span>尚未回報</span>${agentBadge}${linkBtn}</div>`
       : offline
       ? `<div class="m-foot"><span class="badge b-err">離線</span><span>最後回報 ${m.last_seen}</span>${agentBadge}</div>`
-      : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span><span>${svcCount} 服務</span>${m.temp!=null?`<span>·</span><span>${m.temp}°C</span>`:""}</div>`;
-    // 摘要行（收起時顯示）
-    const summaryLine = `<div class="m-collapse-summary" style="display:${collapsed ? "" : "none"}; margin-top:7px; padding-top:7px; border-top:1px solid var(--border); font-size:11px; color:var(--text-3);">${svcCount} 服務 · ${swCount} 軟體（已收起）</div>`;
+      : `<div class="m-foot">${agentBadge}<span>${m.uptime}</span><span>·</span>${vmChipStr}<span>${svcCount} 服務</span>${m.temp!=null?`<span>·</span><span>${m.temp}°C</span>`:""}</div>`;
+    // 收起摘要行：含 VM 數（若有）
+    const vmSummaryPart = vmCount > 0 ? ` · ${vmCount} VM（已收起）` : "（已收起）";
+    const summaryLine = `<div class="m-collapse-summary" style="display:${collapsed ? "" : "none"}; margin-top:7px; padding-top:7px; border-top:1px solid var(--border); font-size:11px; color:var(--text-3);">${svcCount} 服務 · ${swCount} 軟體${vmSummaryPart}</div>`;
+    // 是否顯示收起按鈕：VM 卡自身也有收起按鈕，但不影響 host 的 vm 群組
+    const collapseBtn = `<button class="m-collapse-btn" data-collapse-machine="${id}" title="${collapsed ? "展開" : "收起"}"
+            style="font-size:12px; font-weight:700; line-height:1; padding:1px 5px; border-radius:5px; border:1px solid var(--border-2); background:var(--surface-2); color:var(--text-3); cursor:pointer; transition:.14s; flex:none;"
+            >${collapsed ? "＋" : "−"}</button>`;
     return `<div class="node m-node" data-node="m:${id}" data-machine="${id}" data-health="${h}">
       <div class="node-l" style="background:var(--${lcol});"></div>
       <div class="m-top">
         <div style="min-width:0;">
-          <div style="display:flex; align-items:center; gap:7px;"><span class="sdot ${HCLS[h]} ${h!=="online"?"pulse":""}"></span><span class="m-name">${m.label}</span></div>
+          <div style="display:flex; align-items:center; gap:7px;"><span class="sdot ${HCLS[h]} ${h!=="online"?"pulse":""}"></span><span class="m-name">${m.label}</span>${vmTag}</div>
           <div class="m-role">${id} · ${m.role}</div>
         </div>
         <div style="display:flex; align-items:flex-start; gap:6px; flex:none;">
           <span class="tag" style="margin-top:2px;">${m.arch}</span>
-          <button class="m-collapse-btn" data-collapse-machine="${id}" title="${collapsed ? "展開" : "收起"}"
-            style="font-size:12px; font-weight:700; line-height:1; padding:1px 5px; border-radius:5px; border:1px solid var(--border-2); background:var(--surface-2); color:var(--text-3); cursor:pointer; transition:.14s; flex:none;"
-            >${collapsed ? "＋" : "−"}</button>
+          ${collapseBtn}
         </div>
       </div>
       ${metrics}${gpu}${foot}${summaryLine}
@@ -339,7 +419,40 @@
   }
 
   function renderAll() {
-    $("#col-machines").innerHTML = MACHINE_ORDER.map(machineNode).join("");
+    // 機器欄：按 host+VM 群組渲染
+    const renderOrder = buildRenderOrder();
+    const machineColParts = [];
+    let i = 0;
+    while (i < renderOrder.length) {
+      const entry = renderOrder[i];
+      if (entry.role === "host") {
+        // 渲染 host 卡
+        const hostHtml = machineNode(entry.id);
+        // 找出連續的 vm-linked / vm-unlinked 項目（它們是這台 host 的 VM）
+        const vmParts = [];
+        let j = i + 1;
+        while (j < renderOrder.length && (renderOrder[j].role === "vm-linked" || renderOrder[j].role === "vm-unlinked")) {
+          const vid = renderOrder[j].id;
+          const wrapCls = renderOrder[j].role === "vm-unlinked" ? "vm-card-wrap vm-pending" : "vm-card-wrap";
+          vmParts.push(`<div class="${wrapCls}">${machineNode(vid)}</div>`);
+          j++;
+        }
+        if (vmParts.length > 0) {
+          // host + vm-group 包在一個外層 div 以便 col-stack gap 計算正常
+          machineColParts.push(
+            `<div class="host-vm-block">${hostHtml}<div class="vm-group" data-host-id="${entry.id}">${vmParts.join("")}</div></div>`
+          );
+        } else {
+          machineColParts.push(`<div class="host-vm-block">${hostHtml}</div>`);
+        }
+        i = j;
+      } else {
+        // orphan-vm：正常渲染，不巢狀
+        machineColParts.push(`<div class="host-vm-block">${machineNode(entry.id)}</div>`);
+        i++;
+      }
+    }
+    $("#col-machines").innerHTML = machineColParts.join("");
     $("#col-services").innerHTML = services.map(serviceNode).join("");
     $("#col-software").innerHTML = currentSoftware().map(softwareNode).join("");
     $("#c-machine").textContent = MACHINE_ORDER.length;
@@ -349,16 +462,20 @@
     applyCollapse();
   }
 
-  // 機器分群：同機器節點間留白成帶狀
+  // 機器分群：同機器節點間留白成帶狀（#col-machines 由 host-vm-block 結構自然分群，不需額外間距）
   function applyGrouping() {
     const on = tweaks.grouping === "grouped";
-    ["#col-machines", "#col-services", "#col-software"].forEach((sel) => {
+    ["#col-services", "#col-software"].forEach((sel) => {
       let prev = null;
       [...$(sel).children].forEach((n, i) => {
         const m = n.dataset.machine;
         n.style.marginTop = on && i > 0 && m !== prev ? "28px" : "";
         prev = m;
       });
+    });
+    // host-vm-block 間的間距
+    [...$("#col-machines").children].forEach((n, i) => {
+      n.style.marginTop = on && i > 0 ? "28px" : "";
     });
   }
 
@@ -746,6 +863,8 @@
       const bad = n.dataset.health !== "online";
       n.style.display = issuesOnly && !bad ? "none" : "";
     });
+    // 重新套用 collapse 狀態（確保 VM 節點不被 filter 重置影響）
+    applyCollapse();
     drawEdges();
     if (issuesOnly) svg.querySelectorAll("path").forEach((p) => {
       if (healthOf(p.dataset.from) === "online" && healthOf(p.dataset.to) === "online") p.style.display = "none";
