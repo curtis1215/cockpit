@@ -23,12 +23,13 @@ func buildSvcConfig(mode, absCfg string) (*service.Config, error) {
 		DisplayName: "Cockpit " + mode,
 		Description: "cockpit homelab control plane (" + mode + ")",
 		Arguments:   []string{mode, "-config", absCfg},
+		Option:      service.KeyValue{"SystemdScript": systemdUnitTemplate},
 	}, nil
 }
 
 // program implements service.Interface for kardianos/service.
 type program struct {
-	mode   string
+	mode    string
 	cfgPath string
 }
 
@@ -139,3 +140,38 @@ func runService(args []string) {
 	}
 	fmt.Printf("cockpit-%s: %s OK\n", *mode, action)
 }
+
+// systemdUnitTemplate：複製 kardianos 預設模板、僅把 RestartSec 由 120 改為 5——
+// agent 自我升級（self-exit）後 2 分鐘的重啟延遲體驗太差。
+const systemdUnitTemplate = `[Unit]
+Description={{.Description}}
+ConditionFileIsExecutable={{.Path|cmdEscape}}
+{{range $i, $dep := .Dependencies}} 
+{{$dep}} {{end}}
+
+[Service]
+StartLimitInterval=5
+StartLimitBurst=10
+ExecStart={{.Path|cmdEscape}}{{range .Arguments}} {{.|cmd}}{{end}}
+{{if .ChRoot}}RootDirectory={{.ChRoot|cmd}}{{end}}
+{{if .WorkingDirectory}}WorkingDirectory={{.WorkingDirectory|cmdEscape}}{{end}}
+{{if .UserName}}User={{.UserName}}{{end}}
+{{if .ReloadSignal}}ExecReload=/bin/kill -{{.ReloadSignal}} "$MAINPID"{{end}}
+{{if .PIDFile}}PIDFile={{.PIDFile|cmd}}{{end}}
+{{if and .LogOutput .HasOutputFileSupport -}}
+StandardOutput=file:{{.LogDirectory}}/{{.Name}}.out
+StandardError=file:{{.LogDirectory}}/{{.Name}}.err
+{{- end}}
+{{if gt .LimitNOFILE -1 }}LimitNOFILE={{.LimitNOFILE}}{{end}}
+{{if .Restart}}Restart={{.Restart}}{{end}}
+{{if .SuccessExitStatus}}SuccessExitStatus={{.SuccessExitStatus}}{{end}}
+RestartSec=5
+EnvironmentFile=-/etc/sysconfig/{{.Name}}
+
+{{range $k, $v := .EnvVars -}}
+Environment={{$k}}={{$v}}
+{{end -}}
+
+[Install]
+WantedBy=multi-user.target
+`

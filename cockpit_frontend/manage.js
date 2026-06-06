@@ -594,7 +594,7 @@
   async function upgradeAgent(id) {
     try {
       await api(`/api/systems/${encodeURIComponent(id)}/upgrade-agent`, { method: "POST" });
-      toast("ok", "已派送升級，約 30 秒後生效");
+      toast("ok", "已派送升級（macOS 約 30 秒；Linux 視服務設定最長 2 分鐘）");
       setTimeout(loadAll, 35000);
     } catch (e) {
       toast("err", "升級派送失敗：" + e.message);
