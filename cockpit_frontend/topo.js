@@ -108,16 +108,18 @@
   const link = (a, b) => { (adj[a] ||= new Set()).add(b); (adj[b] ||= new Set()).add(a); };
   edges.forEach((e) => link(e.from, e.to));
 
-  /* ---- 健康判定 ---- */
-  const machineHealth = (id) => MACHINE_META[id].status;        // online|warn|offline
+  /* ---- 健康判定（全部對缺資料防衛：查無 → 中性 "online"，不可 throw）---- */
+  const machineHealth = (id) => (MACHINE_META[id] ? MACHINE_META[id].status : "online"); // online|warn|offline|pending
   function serviceHealth(s) {
+    if (!s) return "online"; // 查無服務 → 中性
     if (machineHealth(s.machine) === "offline" || s.status === "stopped") return "offline";
     if (s.status === "restarting") return "warn";
-    if (s.software.some((w) => installById[w]?.status === "error")) return "offline";
-    if (s.software.some((w) => installById[w]?.status === "behind")) return "warn";
+    if ((s.software || []).some((w) => installById[w]?.status === "error")) return "offline";
+    if ((s.software || []).some((w) => installById[w]?.status === "behind")) return "warn";
     return "online";
   }
   function softwareHealth(w) {
+    if (!w) return "online"; // install 查無（service.software[] 引用了不存在的 id）→ 中性，不可讀 undefined.status
     if (w.status === "error") return "offline";
     if (w.status === "behind" || w.status === "unknown") return "warn";
     return "online";
@@ -406,7 +408,7 @@
   };
   function softwareNode(w) {
     const h = softwareHealth(w);
-    const [cls, lbl] = WSTATUS[w.status];
+    const [cls, lbl] = WSTATUS[w.status] || WSTATUS.unknown; // 未知 status 不可炸渲染
     const badge = w.status === "behind"
       ? `<span class="badge b-warn">落後 ${w.behind_count}</span>`
       : `<span class="badge ${cls}">${lbl}</span>`;
@@ -491,19 +493,26 @@
     svg.setAttribute("height", topo.scrollHeight);
     svg.innerHTML = "";
     edges.forEach((e, idx) => {
-      if (e.kind === "dep" && !tweaks.showDepEdges) return;
-      const a = nodeEl(e.from), b = nodeEl(e.to);
-      if (!a || !b) return;
-      if (a.style.display === "none" || b.style.display === "none") return;
-      const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
-      let sx, tx;
-      if (e.kind === "dep") { sx = ra.left - base.left; tx = rb.left - base.left; }
-      else { sx = ra.right - base.left; tx = rb.left - base.left; }
-      const sy = ra.top - base.top + ra.height / 2;
-      const ty = rb.top - base.top + rb.height / 2;
-      addPath(connectorPath(sx, sy, tx, ty, e.kind), e.kind === "dep" ? "edge dep" : "edge", e, idx);
+      // 單一邊失敗不可炸全圖：包 try/catch
+      try {
+        if (e.kind === "dep" && !tweaks.showDepEdges) return;
+        const a = nodeEl(e.from), b = nodeEl(e.to);
+        if (!a || !b) return;
+        if (a.style.display === "none" || b.style.display === "none") return;
+        const ra = a.getBoundingClientRect(), rb = b.getBoundingClientRect();
+        let sx, tx;
+        if (e.kind === "dep") { sx = ra.left - base.left; tx = rb.left - base.left; }
+        else { sx = ra.right - base.left; tx = rb.left - base.left; }
+        const sy = ra.top - base.top + ra.height / 2;
+        const ty = rb.top - base.top + rb.height / 2;
+        addPath(connectorPath(sx, sy, tx, ty, e.kind), e.kind === "dep" ? "edge dep" : "edge", e, idx);
+      } catch (err) {
+        console.warn("drawEdges: skip edge", e, err);
+      }
     });
-    if (tweaks.healthColors) applyHealthEdges();
+    if (tweaks.healthColors) {
+      try { applyHealthEdges(); } catch (err) { console.warn("applyHealthEdges failed", err); }
+    }
   }
   // 連線樣式：曲線 / 直角 / 直線
   function connectorPath(sx, sy, tx, ty, kind) {
@@ -528,16 +537,21 @@
     const rank = { online: 0, warn: 1, offline: 2 };
     const cls = ["", "e-warn", "e-err"];
     svg.querySelectorAll("path").forEach((p) => {
-      const ha = healthOf(p.dataset.from), hb = healthOf(p.dataset.to);
-      const worst = Math.max(rank[ha] ?? 0, rank[hb] ?? 0);
-      if (cls[worst]) p.classList.add(cls[worst]);
+      try {
+        const ha = healthOf(p.dataset.from), hb = healthOf(p.dataset.to);
+        const worst = Math.max(rank[ha] ?? 0, rank[hb] ?? 0);
+        if (cls[worst]) p.classList.add(cls[worst]);
+      } catch (err) {
+        console.warn("applyHealthEdges: skip path", p.dataset, err);
+      }
     });
   }
   function healthOf(key) {
+    if (!key) return "online";
     const [t, id] = key.split(":");
     if (t === "m") return machineHealth(id);
     if (t === "s") return serviceHealth(services.find((s) => s.id === id));
-    return softwareHealth(installById[id]);
+    return softwareHealth(installById[id]); // installById[id] 可能 undefined → softwareHealth 已防衛
   }
 
   /* ============================================================
@@ -706,7 +720,7 @@
     titleBar(HCLS[h], w.software, `${w.kind} · 於 ${w.machine}`);
     const owners = services.filter((s) => s.software.includes(w.id));
     const key = `${w.software}@${w.latest_version}`, cl = VERSIONS[key];
-    const [cls, lbl] = WSTATUS[w.status];
+    const [cls, lbl] = WSTATUS[w.status] || WSTATUS.unknown;
     const statusBlock = w.status === "behind"
       ? `<div style="display:flex; align-items:center; gap:10px; padding:12px 14px; background:var(--warn-bg); border:1px solid var(--warn-bd); border-radius:10px; margin-bottom:16px;">
            <span class="mono" style="font-size:13px;">${w.current_version}</span>
