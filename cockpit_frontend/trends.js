@@ -60,17 +60,33 @@
         <span style="flex:1;min-width:0;"><div style="font-size:13px;font-weight:550;">${m.label}</div><div style="font-size:10.5px;color:var(--text-3);">${id} · ${m.role}</div></span>
         ${sel ? `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>` : ""}
       </div>`;
-    }).join("") || `<div style="padding:18px;text-align:center;color:var(--text-3);font-size:12.5px;">找不到機器</div>`;
+    }).join("") || `<div style="padding:18px;text-align:center;color:var(--text-3);font-size:12.5px;">無符合機器</div>`;
   }
   function openPopover() {
     $("#m-popover").classList.add("show"); $("#m-switcher").setAttribute("aria-expanded", "true");
     $("#mp-search").value = ""; renderPopoverList(""); setTimeout(() => $("#mp-search").focus(), 30);
   }
   function closePopover() { $("#m-popover").classList.remove("show"); $("#m-switcher").setAttribute("aria-expanded", "false"); }
-  function selectMachine(id) { state.machine = id; localStorage.setItem("cockpit-machine", id); closePopover(); render(); }
+  async function selectMachine(id) {
+    state.machine = id;
+    localStorage.setItem("cockpit-machine", id);
+    closePopover();
+    // Clear charts immediately so stale data isn't visible during prefetch
+    const grid = $("#charts");
+    if (grid) grid.innerHTML = `<div style="grid-column:1/-1;padding:48px 20px;text-align:center;color:var(--text-3);font-size:13px;">載入中…</div>`;
+    renderSwitcher();
+    // Prefetch metrics for the newly selected machine before rendering charts
+    await window.TRENDS.prefetchMetrics(id);
+    render();
+  }
 
   $("#m-switcher").addEventListener("click", (e) => { e.stopPropagation(); $("#m-popover").classList.contains("show") ? closePopover() : openPopover(); });
   $("#mp-search").addEventListener("input", (e) => renderPopoverList(e.target.value));
+  $("#mp-search").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = $("#mp-list").querySelector("[data-pick]");
+    if (first) selectMachine(first.getAttribute("data-pick"));
+  });
   $("#mp-list").addEventListener("click", (e) => { const it = e.target.closest("[data-pick]"); if (it) selectMachine(it.getAttribute("data-pick")); });
   $("#m-prev").addEventListener("click", () => { const i = MACHINE_ORDER.indexOf(state.machine); if (i > 0) selectMachine(MACHINE_ORDER[i - 1]); });
   $("#m-next").addEventListener("click", () => { const i = MACHINE_ORDER.indexOf(state.machine); if (i < MACHINE_ORDER.length - 1) selectMachine(MACHINE_ORDER[i + 1]); });

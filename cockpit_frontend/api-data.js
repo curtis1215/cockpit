@@ -87,8 +87,9 @@
   let _cacheId = null;  // 目前快取對應的機器 id
   const _cache = {};
 
-  async function prefetchMetrics(machineId) {
-    if (_cacheId === machineId && Object.keys(_cache).length === 4) return;
+  async function prefetchMetrics(machineId, { force = false } = {}) {
+    // Skip only when same machine is already fully cached AND not a forced refresh
+    if (!force && _cacheId === machineId && Object.keys(_cache).length === 4) return;
     _cacheId = machineId;
     await Promise.all(Object.keys(RANGES).map(async (range) => {
       try {
@@ -402,6 +403,10 @@ async function loadAll() {
     try {
       await loadAll();
       if (IS_MACHINE) {
+        // Always force-refresh metrics for the currently selected machine
+        const savedId = localStorage.getItem("cockpit-machine");
+        const currentId = (savedId && window.TOPO.MACHINE_META[savedId]) ? savedId : _cacheId;
+        if (currentId) await prefetchMetrics(currentId, { force: true });
         // trends.js 透過 event 重繪
         window.dispatchEvent(new Event("trends:refresh"));
       } else {
