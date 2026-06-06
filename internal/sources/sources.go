@@ -115,5 +115,18 @@ func githubReleaseBody(repo, version string, hc *http.Client, base string) strin
 			return out.Body
 		}
 	}
+	// 第三層 fallback：tag 命名非常規（如 openai/codex 的 rust-vX.Y.Z）——
+	// 列出近期 releases，取第一個 tag 含完整版本字串者。
+	var list []struct {
+		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
+	}
+	if err := getJSON(hc, base+"/repos/"+repo+"/releases?per_page=30", ghHeaders(), &list); err == nil {
+		for _, r := range list {
+			if strings.Contains(r.TagName, version) {
+				return r.Body
+			}
+		}
+	}
 	return ""
 }

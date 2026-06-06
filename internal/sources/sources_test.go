@@ -36,3 +36,20 @@ func TestGithub(t *testing.T) {
 		t.Fatalf("github: %+v %v", res, err)
 	}
 }
+
+func TestGithubReleaseBodyTagFallback(t *testing.T) {
+	s, hc := srv(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/o/m/releases/tags/v0.137.0", "/repos/o/m/releases/tags/0.137.0":
+			http.Error(w, "not found", 404)
+		case "/repos/o/m/releases":
+			w.Write([]byte(`[{"tag_name":"rust-v0.138.0-alpha.1","body":"alpha"},{"tag_name":"rust-v0.137.0","body":"stable notes"}]`))
+		default:
+			http.Error(w, "nope", 404)
+		}
+	})
+	defer s.Close()
+	if got := githubReleaseBody("o/m", "0.137.0", hc, s.URL); got != "stable notes" {
+		t.Fatalf("fallback: %q", got)
+	}
+}
