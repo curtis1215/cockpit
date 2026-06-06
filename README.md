@@ -179,6 +179,12 @@ env -i HOME=$HOME bash -lc '<你的指令>'
 
 - changelog 來源 `github:owner/repo` 會自動嘗試 `v<版本>`、`<版本>`，再 fallback 掃 release 清單比對 tag 內含版本字串（涵蓋 `rust-vX.Y.Z` 等非常規命名）
 - 服務以 root 跑時，使用者層工具（claude/codex 憑證、keychain）多半不可用——建議服務以一般使用者身份執行（macOS plist 加 `UserName`），並執行 `cockpit doctor` 體檢環境
+- **root daemon 降權執行**（agent 是 root、但更新要以一般使用者跑，避免 root 污染 homebrew/家目錄）：用
+  `sudo -u <user> -H bash -lc '<指令>'`，**不要用 `su - <user> -c`**——macOS 的 `su` 在無 TTY 的
+  daemon context 會被 PAM 拒絕（log 只見 `su: Sorry`）。Linux 同理可用 `runuser -l <user> -c '<指令>'`
+- 更新會重啟服務的場景：macOS LaunchAgent 用 `launchctl kickstart -k gui/<uid>/<label>`（先用
+  `launchctl print gui/<uid>/<label>` 確認網域）；Linux user service 由 root 重啟用
+  `systemctl --machine <user>@.host --user restart <unit>`
 
 ## 開發
 
