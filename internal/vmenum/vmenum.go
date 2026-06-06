@@ -80,7 +80,27 @@ func ResolvedVmrun() string { return resolvedVmrunPath() }
 
 // New returns an Enumerator using real system calls.
 func New() *Enumerator {
-	return &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile, RunOrb: orbList, RunVirsh: virshRun}
+	e := &Enumerator{RunVmrun: vmrunList, Glob: fusionGlob, ReadFile: readFile, RunOrb: orbList, RunVirsh: virshRun}
+	if insideOrbGuest() {
+		applyOrbGuestGuard(e)
+	}
+	return e
+}
+
+// insideOrbGuest：是否在 OrbStack guest 內（/opt/orbstack-guest 為 orb 注入的 interop 目錄）。
+func insideOrbGuest() bool {
+	_, err := os.Stat("/opt/orbstack-guest")
+	return err == nil
+}
+
+// applyOrbGuestGuard：OrbStack guest 的 macOS interop 會讓 guest 看到（且能執行）
+// 宿主 mac 的 vmrun/orbctl，導致 guest agent 把宿主的 VM 當成自己的回報、產生重複。
+// 在 guest 內停用 vmware/orb 列舉——宿主的 agent 才是這些 VM 的回報來源。
+// libvirt 保留：guest 內若真跑 nested KVM，那些 VM 確實屬於它。
+func applyOrbGuestGuard(e *Enumerator) {
+	e.RunVmrun = func() (string, error) { return "", errors.New("vmware enumeration disabled inside OrbStack guest") }
+	e.Glob = func() []string { return nil }
+	e.RunOrb = nil
 }
 
 func vmrunList() (string, error) {

@@ -239,3 +239,17 @@ func TestFindVirshFallbackPath(t *testing.T) {
 		t.Fatalf("findVirsh = %q", got)
 	}
 }
+
+func TestOrbGuestGuardDisablesHostEnumeration(t *testing.T) {
+	e := &Enumerator{
+		RunVmrun: func() (string, error) { return "/fake/host.vmx\n", nil },
+		Glob:     func() []string { return []string{"/fake/host.vmx"} },
+		ReadFile: func(string) (string, error) { return "displayName = \"host-vm\"", nil },
+		RunOrb:   func() (string, error) { return `[{"id":"x","name":"host-orb","state":"running"}]`, nil },
+	}
+	applyOrbGuestGuard(e)
+	vms, err := e.Enumerate()
+	if err != nil || vms != nil {
+		t.Fatalf("orb guest should report no VMs, got %v %+v", err, vms)
+	}
+}
