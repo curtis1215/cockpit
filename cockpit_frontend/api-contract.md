@@ -74,6 +74,16 @@ def list_installs(req: Request, machine: str = "", status: str = "", q: str = ""
 **log 行慣例**（前端依首字元上色，請後端沿用）：
 `▶` 標題步驟 · `→` 子步驟 · `✓` 成功 · `✗` 失敗 · `■` 中止 · 其餘為一般輸出。
 
+### 1.4 `System`（機器 / 管理與監控頁）
+
+`GET /api/systems` 回傳每台機器的監控摘要與拓樸欄位，另包含群組欄位：
+
+- `group`：機器自己存的群組名（空字串 = 未分組；VM 留空 = 繼承宿主機）
+- `effective_group`：含 VM 繼承計算後的有效群組（前端過濾一律用這個欄位）
+
+`PATCH /api/systems/{id}` body 另接受 `"group"`（optional string）：trim 後存入，
+長度上限 64 字元（rune），空字串 = 清除群組/恢復繼承。
+
 ---
 
 ## 2. REST 端點
