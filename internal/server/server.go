@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	rootpkg "github.com/curtis1215/cockpit"
 	"github.com/curtis1215/cockpit/internal/inventory"
@@ -21,6 +23,13 @@ type Server struct {
 	onCheck      func()
 	mux          *http.ServeMux
 	version      string
+	latestFn     func() (string, error)
+	upgradeFn    func() (bool, error)
+	exitFn       func()
+	latestMu     sync.Mutex
+	latestCache  string
+	latestAt     time.Time
+	upgrading    atomic.Bool
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
@@ -29,6 +38,11 @@ func New(st *store.Store, enrollSecret string) *Server {
 
 func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Inventory) *Server {
 	s := &Server{st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux()}
+	s.latestFn = defaultLatestFn()
+	s.upgradeFn = func() (bool, error) {
+		return defaultUpgrade(s.version)
+	}
+	s.exitFn = func() { os.Exit(0) }
 	s.routes()
 	return s
 }
@@ -86,13 +100,7 @@ func (s *Server) routes() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"ok":true}`))
 	})
-	s.mux.HandleFunc("/api/version", func(w http.ResponseWriter, r *http.Request) {
-		v := s.version
-		if v == "" {
-			v = "dev"
-		}
-		writeJSON(w, 200, map[string]string{"version": v})
-	})
+	s.mux.HandleFunc("/api/version", s.apiVersion)
 	s.mux.HandleFunc("/api/systems", s.apiSystemsEnriched)
 	s.registerAgentAPI()
 	s.registerAgentVT()
