@@ -207,6 +207,9 @@
       const metaFrag = st === "pending"
         ? `<span class="badge b-info">待 agent 連線</span>`
         : `<span style="font-size:12px;color:var(--text-3);">${m.os || ""}${m.arch ? " / " + m.arch : ""}${agentVer ? " · v" + agentVer : ""}</span>`;
+      const groupPlaceholder = m.kind === "vm" && !m.group && m.effective_group
+        ? "繼承：" + m.effective_group
+        : "群組";
 
       return `
         <div class="mrow" data-machine-id="${escHtml(m.id)}">
@@ -215,6 +218,11 @@
                  value="${escHtml(m.label)}" title="點擊可重新命名" style="flex:none;" />
           <span class="badge ${badgeCls}" style="flex:none;">${statusLabel}</span>
           ${metaFrag}
+          <input class="inline-name" list="grp-datalist" data-grpedit="${escHtml(m.id)}"
+                 value="${escHtml(m.group || "")}"
+                 placeholder="${escHtml(groupPlaceholder)}"
+                 title="群組（留空 = ${m.kind === "vm" ? "繼承宿主機" : "未分組"}）"
+                 style="flex:none;width:104px;font-size:12px;" />
           <span style="flex:1;"></span>
           <span style="font-size:12px;color:var(--text-3);flex:none;">${swCount} 套軟體</span>
           ${showUpgradeBtn ? `<button class="btn btn-xs" data-upgrade-agent="${escHtml(m.id)}" title="升級 agent 至 v${escHtml(serverVersion)}" style="color:var(--warn);">⬆ 升級 agent</button>` : ""}
@@ -228,6 +236,9 @@
           </button>
         </div>`;
     }).join("");
+    const grpNames = [...new Set(SYSTEMS.map((s) => s.group).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    el.insertAdjacentHTML("beforeend",
+      `<datalist id="grp-datalist">${grpNames.map((g) => `<option value="${escHtml(g)}">`).join("")}</datalist>`);
   }
 
   // ── Render: software ───────────────────────────────────────────────────────
@@ -348,6 +359,25 @@
       if (e.status === 409) toast("warn", "該機器有軟體綁定，暫不支援改名");
       else toast("err", "改名失敗：" + e.message);
       if (inputEl) inputEl.value = m.label; // revert
+    }
+  }
+
+  // ── Set machine group ──────────────────────────────────────────────────────
+  async function setMachineGroup(id, grp, inputEl) {
+    const m = SYSTEMS.find((s) => s.id === id);
+    if (!m) return;
+    if (grp === (m.group || "")) return;
+    try {
+      await api(`/api/systems/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ group: grp }),
+      });
+      toast("ok", grp ? `已設定群組：${grp}` : "已清除群組");
+      await loadAll();
+    } catch (e) {
+      toast("err", "群組更新失敗：" + e.message);
+      if (inputEl) inputEl.value = m.group || ""; // revert
     }
   }
 
@@ -556,6 +586,11 @@
 
   // rename on blur / enter
   $("#machine-list").addEventListener("change", (e) => {
+    const g = e.target.closest("[data-grpedit]");
+    if (g) {
+      setMachineGroup(g.getAttribute("data-grpedit"), g.value.trim(), g);
+      return;
+    }
     const r = e.target.closest("[data-rename]");
     if (!r) return;
     const id = r.getAttribute("data-rename");
@@ -565,7 +600,7 @@
     else if (m) r.value = m.label;
   });
   $("#machine-list").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && e.target.closest("[data-rename]")) e.target.blur();
+    if (e.key === "Enter" && (e.target.closest("[data-rename]") || e.target.closest("[data-grpedit]"))) e.target.blur();
   });
 
   // 軟體清單
