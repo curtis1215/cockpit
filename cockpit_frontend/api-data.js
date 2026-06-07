@@ -203,6 +203,8 @@ async function loadAll() {
         warnings: computeWarnings(sys),
         kind:     sys.kind || "physical",
         host_id:  sys.host_id || null,
+        group:           sys.group || "",
+        effective_group: sys.effective_group || "",
       };
     });
 
@@ -243,6 +245,8 @@ async function loadAll() {
               // host_id 供拓樸巢狀分群使用
               host_id:         vm.host_system_id || null,
               kind:            "vm",
+              group:           "",
+              effective_group: hostSys ? (hostSys.effective_group || "") : "",
             };
             MACHINE_ORDER.push(pendingId);
           }
@@ -334,6 +338,13 @@ async function loadAll() {
 
     /* ── 發佈 window.TOPO / window.MOCK ── */
     window.TOPO = { MACHINE_META, MACHINE_ORDER, SERVICES };
+
+    /* ── 群組切換器：以 effective_group 集合初始化 ── */
+    if (window.CockpitGroups) {
+      const effs = MACHINE_ORDER.map((id) => (MACHINE_META[id] || {}).effective_group || "");
+      window.CockpitGroups.init(effs.filter(Boolean), effs.some((g) => !g));
+    }
+
     window.MOCK = {
       INSTALLS,
       // topo.js 也需要 VERSIONS / JOB_SCRIPTS（詳情抽屜用）
@@ -344,12 +355,16 @@ async function loadAll() {
 
     /* ── machine.html：預先快取 4 個 range 的 metrics ── */
     if (IS_MACHINE) {
-      // 決定初始機器（localStorage 或第一台線上）
+      // 決定初始機器（localStorage 或群組內第一台線上）
+      const inGroup = (id) =>
+        !window.CockpitGroups ||
+        window.CockpitGroups.matches((MACHINE_META[id] || {}).effective_group || "");
       const firstOnline = MACHINE_ORDER.find(
-        (id) => MACHINE_META[id] && MACHINE_META[id].status !== "offline" && MACHINE_META[id].status !== "pending"
-      ) || MACHINE_ORDER[0];
+        (id) => MACHINE_META[id] && inGroup(id)
+          && MACHINE_META[id].status !== "offline" && MACHINE_META[id].status !== "pending"
+      ) || MACHINE_ORDER.find(inGroup) || MACHINE_ORDER[0];
       const savedId = localStorage.getItem("cockpit-machine");
-      const initId  = (savedId && MACHINE_META[savedId]) ? savedId : firstOnline;
+      const initId  = (savedId && MACHINE_META[savedId] && inGroup(savedId)) ? savedId : firstOnline;
       if (initId) await prefetchMetrics(initId);
     }
 
