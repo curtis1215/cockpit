@@ -1,29 +1,28 @@
-# Python
+# Go
+/cockpit-bin
+dist/
+
+# 執行期資料（sqlite + WAL sidecar）
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# 本機設定 / secrets
+/inventory.yaml
+inventory.local.yaml
+.env
+*.local
+.claude/settings.local.json
+
+# Python 殘留（本機 venv / cache）
 __pycache__/
 *.py[cod]
 .venv/
 venv/
 *.egg-info/
-
-# SQLite
-*.db
-*.sqlite
-*.sqlite3
-
-# Local config / secrets
-/inventory.yaml
-inventory.local.yaml
-.env
-*.local
-
-# Go binaries
-/cockpit-bin
-dist/
+.pytest_cache/
 
 # OS
 .DS_Store
-
-cockpit.db
-*.db
-dist/
-*.egg-info/
