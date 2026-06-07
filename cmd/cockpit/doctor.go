@@ -191,8 +191,24 @@ func checkOneService(print func(string), mode string) {
 	if runtime.GOOS == "darwin" {
 		extra = macPlistUserWarning(mode)
 	}
+	if mode == "serve" {
+		if exe, err := os.Executable(); err == nil {
+			extra += binaryWritableWarning(exe)
+		}
+	}
 
 	print(fmt.Sprintf("%s %s：%s%s", icon, label, stateStr, extra))
+}
+
+// binaryWritableWarning returns a self-upgrade prerequisite warning when the
+// server process cannot open its own binary for writing.
+func binaryWritableWarning(exePath string) string {
+	f, err := os.OpenFile(exePath, os.O_WRONLY, 0)
+	if err != nil {
+		return "\n  ⚠️ server binary 不可寫，Web UI 自我升級會失敗（sudo chown <service-user> " + exePath + "）"
+	}
+	_ = f.Close()
+	return ""
 }
 
 // macPlistUserWarning 檢查 /Library/LaunchDaemons/cockpit-<mode>.plist 的 UserName。

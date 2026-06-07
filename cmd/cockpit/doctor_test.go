@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +37,28 @@ func TestInSudoSecurePath(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("inSudoSecurePath(%q) = %v, want %v", tc.dir, got, tc.want)
 		}
+	}
+}
+
+func TestBinaryWritableWarning(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can write read-only files")
+	}
+
+	writable := filepath.Join(t.TempDir(), "cockpit")
+	if err := os.WriteFile(writable, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if w := binaryWritableWarning(writable); w != "" {
+		t.Fatalf("writable file should not warn: %q", w)
+	}
+
+	readOnly := filepath.Join(t.TempDir(), "cockpit-ro")
+	if err := os.WriteFile(readOnly, []byte("x"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if w := binaryWritableWarning(readOnly); w == "" {
+		t.Fatal("read-only file should warn")
 	}
 }
 
