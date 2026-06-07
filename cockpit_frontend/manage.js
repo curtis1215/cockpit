@@ -756,5 +756,5 @@
     });
   }
 
-  refreshServerVersion().then(() => loadAll());
+  refreshServerVersion().catch(() => {}).then(() => loadAll()); // version 失敗不可擋住頁面載入
 })();
