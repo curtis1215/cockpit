@@ -321,3 +321,59 @@ func TestEffectiveGroupHostMissing(t *testing.T) {
 	}
 	t.Fatal("guest not found")
 }
+
+func TestPatchSystemGroup(t *testing.T) {
+	srv, st := vtServer(t)
+	id, _, err := st.CreateSystemPending("pbox", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// 設定群組（含前後空白 → 應 trim）
+	rec := doJSON(t, srv, "PATCH", "/api/systems/"+id, `{"group":"  工作  "}`)
+	if rec.Code != 200 {
+		t.Fatalf("patch: %d %s", rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["group"] != "工作" {
+		t.Fatalf("group = %v, want 工作 (trimmed)", resp["group"])
+	}
+
+	// 只動 group 不應影響 label / role
+	if resp["label"] != "pbox" {
+		t.Fatalf("label changed: %v", resp["label"])
+	}
+
+	// 清空群組
+	rec = doJSON(t, srv, "PATCH", "/api/systems/"+id, `{"group":""}`)
+	if rec.Code != 200 {
+		t.Fatalf("clear: %d %s", rec.Code, rec.Body.String())
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["group"] != "" {
+		t.Fatalf("group = %v, want empty", resp["group"])
+	}
+
+	// 超過 64 字元 → 400
+	long := strings.Repeat("超", 65)
+	rec = doJSON(t, srv, "PATCH", "/api/systems/"+id, `{"group":"`+long+`"}`)
+	if rec.Code != 400 {
+		t.Fatalf("too long: %d %s", rec.Code, rec.Body.String())
+	}
+
+	// 不帶 group 欄位 → 不變
+	if err := st.SetSystemGroup(id, "保留"); err != nil {
+		t.Fatal(err)
+	}
+	rec = doJSON(t, srv, "PATCH", "/api/systems/"+id, `{"role":"web"}`)
+	if rec.Code != 200 {
+		t.Fatalf("role-only patch: %d %s", rec.Code, rec.Body.String())
+	}
+	json.Unmarshal(rec.Body.Bytes(), &resp)
+	if resp["group"] != "保留" {
+		t.Fatalf("group = %v, want 保留 (untouched)", resp["group"])
+	}
+}

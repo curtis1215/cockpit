@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/curtis1215/cockpit/internal/inventory"
 	"github.com/curtis1215/cockpit/internal/store"
@@ -55,6 +56,7 @@ func (s *Server) patchSystem(w http.ResponseWriter, r *http.Request, id string) 
 	var body struct {
 		Label *string `json:"label"`
 		Role  *string `json:"role"`
+		Group *string `json:"group"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, 400, map[string]string{"error": "bad json"})
@@ -105,6 +107,22 @@ func (s *Server) patchSystem(w http.ResponseWriter, r *http.Request, id string) 
 		}
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
+	}
+
+	if body.Group != nil {
+		g := strings.TrimSpace(*body.Group)
+		if utf8.RuneCountInString(g) > 64 {
+			writeJSON(w, 400, map[string]string{"error": "group too long (max 64 chars)"})
+			return
+		}
+		if err := s.st.SetSystemGroup(id, g); err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				writeJSON(w, 404, map[string]string{"error": "system not found"})
+				return
+			}
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	// Return updated system
