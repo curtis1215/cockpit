@@ -158,6 +158,9 @@ software:
 
 ## 軟體追蹤配置心法（工具鏈環境）
 
+> 💡 用 Claude Code 的話：repo 內建 `track-software` skill（`.claude/skills/track-software/`），
+> 直接說「幫我在某台機器追蹤某軟體」即可走完偵測 → 驗證 → 建立 → 驗收的完整流程。
+
 agent 以系統服務（launchd/systemd）執行指令時，環境跟你的互動 shell **不同**：沒有
 `.zshrc`/homebrew PATH、沒有 `PNPM_HOME` 等變數。配置 `current_cmd` 與更新指令時依安裝方式套用：
 
