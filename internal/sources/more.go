@@ -36,10 +36,14 @@ func fetchBrew(sw inventory.Software, locator string, hc *http.Client, base stri
 	if err := getJSON(hc, base+"/api/formula/"+locator+".json", nil, &out); err != nil {
 		return SourceResult{}, err
 	}
-	return SourceResult{Version: out.Versions.Stable}, nil
+	res := SourceResult{Version: out.Versions.Stable}
+	if strings.HasPrefix(sw.Changelog, "github:") {
+		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
+	}
+	return res, nil
 }
 
-func fetchCustom(sw inventory.Software, locator string) (SourceResult, error) {
+func fetchCustom(sw inventory.Software, locator string, hc *http.Client) (SourceResult, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	c := exec.CommandContext(ctx, "bash", "-lc", locator)
@@ -52,5 +56,9 @@ func fetchCustom(sw inventory.Software, locator string) (SourceResult, error) {
 	if v == "" {
 		v = out
 	}
-	return SourceResult{Version: v}, nil
+	res := SourceResult{Version: v}
+	if strings.HasPrefix(sw.Changelog, "github:") {
+		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
+	}
+	return res, nil
 }

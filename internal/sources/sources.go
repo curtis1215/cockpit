@@ -18,11 +18,13 @@ type SourceResult struct {
 }
 
 const (
-	npmBase    = "https://registry.npmjs.org"
-	githubBase = "https://api.github.com"
-	pypiBase   = "https://pypi.org"
-	brewBase   = "https://formulae.brew.sh"
+	npmBase  = "https://registry.npmjs.org"
+	pypiBase = "https://pypi.org"
+	brewBase = "https://formulae.brew.sh"
 )
+
+// var（非 const）：測試需要指到 httptest server。
+var githubBase = "https://api.github.com"
 
 func split(source string) (provider, locator string) {
 	i := strings.IndexByte(source, ':')
@@ -49,7 +51,7 @@ func FetchLatest(sw inventory.Software, hc *http.Client) (SourceResult, error) {
 	case "claude-plugin":
 		return fetchGithub(sw, locator, hc, githubBase)
 	case "custom":
-		return fetchCustom(sw, locator)
+		return fetchCustom(sw, locator, hc)
 	default:
 		return SourceResult{}, fmt.Errorf("unknown provider: %s", provider)
 	}
