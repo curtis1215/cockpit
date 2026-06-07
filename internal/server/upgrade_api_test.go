@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 )
 
 var errBoom = errors.New("boom")
@@ -81,4 +82,111 @@ func TestVersionLatestFetchFails(t *testing.T) {
 	if resp["version"] != "0.2.1" || resp["latest"] != "" || resp["update_available"] != false {
 		t.Fatalf("unexpected response: %v", resp)
 	}
+}
+
+func TestServerUpgradeSuccess(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.2.1")
+
+	exited := make(chan struct{})
+	srv.upgradeFn = func() (bool, error) {
+		return true, nil
+	}
+	srv.exitFn = func() {
+		close(exited)
+	}
+
+	rec := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec.Code != 202 {
+		t.Fatalf("upgrade: %d %s", rec.Code, rec.Body.String())
+	}
+
+	select {
+	case <-exited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("exitFn not called within 3s")
+	}
+}
+
+func TestServerUpgradeUpToDate(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.2.1")
+	srv.upgradeFn = func() (bool, error) {
+		return false, nil
+	}
+	srv.exitFn = func() {
+		t.Fatal("must not exit when already up to date")
+	}
+
+	rec := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec.Code != 200 {
+		t.Fatalf("upgrade: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec2 := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec2.Code != 200 {
+		t.Fatalf("second release should be allowed after up_to_date, got %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestServerUpgradeError(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.2.1")
+	srv.upgradeFn = func() (bool, error) {
+		return false, errBoom
+	}
+
+	rec := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec.Code != 500 {
+		t.Fatalf("error: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec2 := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec2.Code != 500 {
+		t.Fatalf("lock should be released after error, got %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestServerUpgradeConflict(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.2.1")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv.upgradeFn = func() (bool, error) {
+		close(started)
+		<-release
+		return false, nil
+	}
+
+	done := make(chan *httptestResult, 1)
+	go func() {
+		rec := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+		done <- &httptestResult{code: rec.Code, body: rec.Body.String()}
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("upgradeFn not started")
+	}
+
+	rec2 := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec2.Code != 409 {
+		t.Fatalf("conflict: %d %s", rec2.Code, rec2.Body.String())
+	}
+
+	close(release)
+	select {
+	case res := <-done:
+		if res.code != 200 {
+			t.Fatalf("first upgrade: %d %s", res.code, res.body)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("first upgrade did not finish")
+	}
+}
+
+type httptestResult struct {
+	code int
+	body string
 }

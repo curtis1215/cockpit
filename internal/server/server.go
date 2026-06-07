@@ -101,6 +101,7 @@ func (s *Server) routes() {
 		w.Write([]byte(`{"ok":true}`))
 	})
 	s.mux.HandleFunc("/api/version", s.apiVersion)
+	s.mux.HandleFunc("/api/server/upgrade", s.apiServerUpgrade)
 	s.mux.HandleFunc("/api/systems", s.apiSystemsEnriched)
 	s.registerAgentAPI()
 	s.registerAgentVT()
