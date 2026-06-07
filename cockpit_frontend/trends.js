@@ -10,12 +10,18 @@
   const $ = (s, r = document) => r.querySelector(s);
   const installById = Object.fromEntries(INSTALLS.map((i) => [i.id, i]));
 
-  const firstOnline = MACHINE_ORDER.find((id) => MACHINE_META[id].status !== "offline") || MACHINE_ORDER[0];
+  /* ---- 群組過濾 ---- */
+  const grpVisible = (id) =>
+    !window.CockpitGroups || window.CockpitGroups.matches((MACHINE_META[id] || {}).effective_group || "");
+  const visibleOrder = () => MACHINE_ORDER.filter(grpVisible);
+
+  const firstOnline = visibleOrder().find((id) => MACHINE_META[id].status !== "offline")
+    || visibleOrder()[0] || MACHINE_ORDER[0];
   const state = {
     machine: localStorage.getItem("cockpit-machine") || firstOnline,
     range: localStorage.getItem("cockpit-range") || "24h",
   };
-  if (!MACHINE_META[state.machine]) state.machine = firstOnline;
+  if (!MACHINE_META[state.machine] || !grpVisible(state.machine)) state.machine = firstOnline;
 
   /* ---- 主題 ---- */
   function initTheme() {
@@ -45,14 +51,15 @@
     $("#sw-dot").className = "sdot " + (HCLS[m.status] || "s-offline") + (m.status !== "online" ? " pulse" : "");
     $("#sw-name").textContent = m.label;
     $("#sw-id").textContent = state.machine;
-    $("#m-count").textContent = MACHINE_ORDER.length + " 台";
-    const idx = MACHINE_ORDER.indexOf(state.machine);
+    const ord = visibleOrder();
+    $("#m-count").textContent = ord.length + " 台";
+    const idx = ord.indexOf(state.machine);
     $("#m-prev").disabled = idx <= 0;
-    $("#m-next").disabled = idx >= MACHINE_ORDER.length - 1;
+    $("#m-next").disabled = idx >= ord.length - 1;
   }
   function renderPopoverList(filter) {
     const f = (filter || "").trim().toLowerCase();
-    const ids = MACHINE_ORDER.filter((id) => !f || id.toLowerCase().includes(f) || MACHINE_META[id].label.toLowerCase().includes(f));
+    const ids = visibleOrder().filter((id) => !f || id.toLowerCase().includes(f) || MACHINE_META[id].label.toLowerCase().includes(f));
     $("#mp-list").innerHTML = ids.map((id) => {
       const m = MACHINE_META[id], sel = id === state.machine;
       return `<div class="mp-item ${sel ? "sel" : ""}" data-pick="${id}" role="option" aria-selected="${sel}">
@@ -88,8 +95,8 @@
     if (first) selectMachine(first.getAttribute("data-pick"));
   });
   $("#mp-list").addEventListener("click", (e) => { const it = e.target.closest("[data-pick]"); if (it) selectMachine(it.getAttribute("data-pick")); });
-  $("#m-prev").addEventListener("click", () => { const i = MACHINE_ORDER.indexOf(state.machine); if (i > 0) selectMachine(MACHINE_ORDER[i - 1]); });
-  $("#m-next").addEventListener("click", () => { const i = MACHINE_ORDER.indexOf(state.machine); if (i < MACHINE_ORDER.length - 1) selectMachine(MACHINE_ORDER[i + 1]); });
+  $("#m-prev").addEventListener("click", () => { const ord = visibleOrder(); const i = ord.indexOf(state.machine); if (i > 0) selectMachine(ord[i - 1]); });
+  $("#m-next").addEventListener("click", () => { const ord = visibleOrder(); const i = ord.indexOf(state.machine); if (i < ord.length - 1) selectMachine(ord[i + 1]); });
   document.addEventListener("click", (e) => { if (!e.target.closest("#m-popover") && !e.target.closest("#m-switcher")) closePopover(); });
   document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePopover(); });
 
@@ -350,4 +357,11 @@
   initTheme();
   render();
   window.addEventListener("trends:refresh", () => render());
+  if (window.CockpitGroups) {
+    window.CockpitGroups.onChange(() => {
+      const ord = visibleOrder();
+      if (!ord.includes(state.machine) && ord.length) { selectMachine(ord[0]); return; }
+      renderSwitcher();
+    });
+  }
 })();
