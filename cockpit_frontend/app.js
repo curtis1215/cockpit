@@ -25,6 +25,24 @@
     INSTALLS = rows.map((r) => ({ ...r, checked_at: r.last_checked }));
     MACHINES = [...new Set(INSTALLS.map((i) => i.machine))].sort();
   }
+
+  /* ---- 群組：label → effective_group 對照（installs.machine 是 label）---- */
+  let EFF_BY_LABEL = {};
+  async function loadSystems() {
+    try {
+      const systems = await api("/api/systems");
+      EFF_BY_LABEL = Object.fromEntries(systems.map((s) => [s.label, s.effective_group || ""]));
+      if (window.CockpitGroups) {
+        const effs = systems.map((s) => s.effective_group || "");
+        window.CockpitGroups.init(effs.filter(Boolean), effs.some((g) => !g));
+      }
+    } catch (_) {
+      EFF_BY_LABEL = {};
+    }
+  }
+  const machineVisible = (label) =>
+    !window.CockpitGroups || window.CockpitGroups.matches(EFF_BY_LABEL[label] || "");
+
   async function loadJobs() {
     const rows = await api("/api/jobs");
     JOBS = rows.map((j) => ({
@@ -103,11 +121,16 @@
     const sel = $("#filter-machine");
     // 清除舊選項（除了第一個「全部機器」佔位符）
     while (sel.options.length > 1) sel.remove(1);
-    MACHINES.forEach((m) => {
+    MACHINES.filter(machineVisible).forEach((m) => {
       const o = document.createElement("option");
       o.value = m; o.textContent = m;
       sel.appendChild(o);
     });
+    // 目前選中的機器被群組過濾掉 → 重設為全部
+    if (state.filters.machine && !machineVisible(state.filters.machine)) {
+      state.filters.machine = "";
+    }
+    sel.value = state.filters.machine || "";
   }
 
   function initFilters() {
@@ -143,6 +166,7 @@
   function filtered() {
     const { machine, onlyUpdates, q } = state.filters;
     return state.installs.filter((it) => {
+      if (!machineVisible(it.machine)) return false;
       if (machine && it.machine !== machine) return false;
       if (onlyUpdates && it.status !== "behind") return false;
       if (q && !it.software.toLowerCase().includes(q)) return false;
@@ -299,7 +323,7 @@
   }
 
   function renderSummary() {
-    const all = state.installs;
+    const all = state.installs.filter((i) => machineVisible(i.machine));
     const behind = all.filter((i) => i.status === "behind").length;
     const issues = all.filter((i) => i.status === "error" || i.status === "unknown").length;
     const ok = all.filter((i) => i.status === "up_to_date").length;
@@ -665,6 +689,7 @@
     await new Promise((r) => setTimeout(r, 2000));
     try {
       await loadInstalls();
+      await loadSystems();
       state.installs = structuredClone(INSTALLS);
       populateMachineFilter();
     } catch (_) {}
@@ -773,6 +798,7 @@
     } catch (_) {}
     try {
       await loadInstalls();
+      await loadSystems();
       await loadJobs();
       // 把真實資料填入 state
       state.installs = structuredClone(INSTALLS);
@@ -781,6 +807,9 @@
     } catch (e) {
       console.error("cockpit: failed to load data", e);
       showLoadError();
+    }
+    if (window.CockpitGroups) {
+      window.CockpitGroups.onChange(() => { populateMachineFilter(); render(); });
     }
     render();
     renderRecentJobs();
