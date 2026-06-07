@@ -199,3 +199,29 @@ Job.kind         : command | agent
 - [ ] `POST /api/check` → 接 `#check-btn`
 - [ ] 刪除 `mock-data.js` 與 `JOB_SCRIPTS`
 - [ ] enum / 欄位名與 repo spec 對齊（§5、§6）
+
+## 8. Server 版本與自我升級
+
+### `GET /api/version`
+
+回應範例：
+
+```json
+{"version":"0.2.1","latest":"0.2.2","update_available":true}
+```
+
+- `version`：目前 server binary 版本；dev build 會回 `dev`。
+- `latest`：server 端由 GitHub latest release 查得的最新版本；查詢失敗或 dev build 時為空字串。
+- `update_available`：`latest` 不為空且 `latest != version` 時為 `true`；dev build 一律為 `false`。
+
+### `POST /api/server/upgrade`
+
+觸發 server 使用既有 `internal/selfupdate` 自我升級，替換 binary 後約 1 秒退出，交由 launchd/systemd 服務管理器重啟。
+
+回應：
+
+- `202 {"status":"restarting"}`：已替換 binary，server 即將退出並重啟。
+- `200 {"status":"up_to_date"}`：GitHub latest 與目前版本相同，未替換 binary。
+- `400`：dev build 不允許自我升級。
+- `409`：升級已在進行。
+- `500`：升級失敗；可能原因包含 server process 無法寫入自身 binary，需調整檔案擁有者，例如 `sudo chown <service-user> <binary>`。
