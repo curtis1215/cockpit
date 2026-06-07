@@ -234,6 +234,9 @@
 
       <div class="flex-1"></div>
 
+      <!-- 群組切換器（groups.js 動態填充；無群組時自動隱藏） -->
+      <div id="group-switcher" class="mr-1" style="display:none;"></div>
+
       <!-- 上次檢查 -->
       <div class="hidden sm:flex flex-col items-end leading-tight mr-1">
         <span class="text-[11px]" style="color: var(--text-3);">上次檢查</span>
@@ -410,6 +413,7 @@
     </div>
   </div>
 
+  <script src="groups.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
