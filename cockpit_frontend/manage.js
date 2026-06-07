@@ -73,6 +73,25 @@
   }
 
   // ── Status helpers ─────────────────────────────────────────────────────────
+
+  function outdatedAgents() {
+    if (!serverVersion) return [];
+    return SYSTEMS.filter((m) => m.agent_version && m.agent_version !== serverVersion);
+  }
+
+  function refreshUpgradeAllBtn() {
+    const btn = $("#upgrade-all-agents");
+    if (!btn) return;
+    const list = outdatedAgents();
+    if (list.length >= 2) {
+      btn.style.display = "inline-flex";
+      const label = $("#upgrade-all-label");
+      if (label) label.textContent = `升級全部 agent（${list.length} 台）`;
+    } else {
+      btn.style.display = "none";
+    }
+  }
+
   const HSTATUS = {
     online:  ["s-online", "b-ok",   "線上"],
     warn:    ["s-warn",   "b-warn",  "警告"],
@@ -239,6 +258,8 @@
     const grpNames = [...new Set(SYSTEMS.map((s) => s.group).filter(Boolean))].sort((a, b) => a.localeCompare(b));
     el.insertAdjacentHTML("beforeend",
       `<datalist id="grp-datalist">${grpNames.map((g) => `<option value="${escHtml(g)}">`).join("")}</datalist>`);
+
+    refreshUpgradeAllBtn();
   }
 
   // ── Render: software ───────────────────────────────────────────────────────
@@ -636,6 +657,39 @@
     }
   }
 
+  async function upgradeAllAgents() {
+    const targets = outdatedAgents();
+    if (targets.length < 2) return;
+    const names = targets.map((m) => m.label).join("、");
+    if (!confirm(`將升級 ${targets.length} 台 agent 至 v${serverVersion}：${names}，確定？`)) return;
+
+    const btn = $("#upgrade-all-agents");
+    if (btn) btn.disabled = true;
+    try {
+      const results = await Promise.allSettled(
+        targets.map((m) =>
+          api(`/api/systems/${encodeURIComponent(m.id)}/upgrade-agent`, { method: "POST" })
+        )
+      );
+      const failed = results
+        .map((r, i) => (r.status === "rejected" ? targets[i].label : null))
+        .filter(Boolean);
+      const okCount = targets.length - failed.length;
+      if (failed.length === 0) {
+        toast("ok", `已派送 ${okCount} 台升級（macOS 約 30 秒；Linux 視服務設定最長 2 分鐘）`);
+      } else {
+        toast("warn", `已派送 ${okCount} 台；失敗：${failed.join("、")}`);
+      }
+      setTimeout(loadAll, 35000);
+    } catch (e) {
+      toast("err", "批次升級派送失敗：" + (e.message || e));
+    } finally {
+      if (btn) btn.disabled = false;
+      refreshUpgradeAllBtn();
+    }
+  }
+
+
   // ── Init ───────────────────────────────────────────────────────────────────
   initTheme();
   // 顯示 server 版本（best-effort）並存入 serverVersion
@@ -669,6 +723,9 @@
     return null;
   }
 
+  const upgradeAllBtn = $("#upgrade-all-agents");
+  if (upgradeAllBtn) upgradeAllBtn.addEventListener("click", upgradeAllAgents);
+
   const upgradeBtn = document.getElementById("server-upgrade-btn");
   if (upgradeBtn) {
     upgradeBtn.addEventListener("click", async () => {
@@ -699,6 +756,5 @@
     });
   }
 
-  refreshServerVersion();
-  loadAll();
+  refreshServerVersion().then(() => loadAll());
 })();
