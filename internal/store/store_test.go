@@ -85,3 +85,53 @@ func TestHeartbeatAndList(t *testing.T) {
 		t.Fatalf("bad list: %+v", list)
 	}
 }
+
+func TestSystemGroupColumn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "g.db")
+	st, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, _, err := st.CreateSystemPending("gbox", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 預設未分組
+	sys, err := st.SystemByID(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sys.Grp != "" {
+		t.Fatalf("default grp = %q, want empty", sys.Grp)
+	}
+	// 設定群組（中文 OK）
+	if err := st.SetSystemGroup(id, "工作"); err != nil {
+		t.Fatal(err)
+	}
+	sys, _ = st.SystemByID(id)
+	if sys.Grp != "工作" {
+		t.Fatalf("grp = %q, want 工作", sys.Grp)
+	}
+	// 清空（解除分組）
+	if err := st.SetSystemGroup(id, ""); err != nil {
+		t.Fatal(err)
+	}
+	sys, _ = st.SystemByID(id)
+	if sys.Grp != "" {
+		t.Fatalf("grp = %q, want empty after clear", sys.Grp)
+	}
+	// 不存在的 id → ErrNotFound
+	if err := st.SetSystemGroup("sys_nope", "x"); err != ErrNotFound {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	// migration 冪等：關掉重開同一個 db 不應報錯
+	st.Close()
+	st2, err := Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer st2.Close()
+	if sys, err = st2.SystemByID(id); err != nil || sys.Grp != "" {
+		t.Fatalf("after reopen: err=%v grp=%q", err, sys.Grp)
+	}
+}

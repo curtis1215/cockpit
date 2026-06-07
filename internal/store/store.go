@@ -33,6 +33,7 @@ type System struct {
 	EnrollToken  string `json:"-"`
 	Created      int64  `json:"created"`
 	MachineUUID  string `json:"machine_uuid"`
+	Grp          string `json:"group"`
 }
 
 type Store struct{ db *sql.DB }
@@ -58,6 +59,12 @@ func Open(path string) (*Store, error) {
 	}
 	// Defensive migration: add machine_uuid to systems.
 	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN machine_uuid TEXT NOT NULL DEFAULT ''`); err != nil {
+		if !contains(err.Error(), "duplicate column name") {
+			return nil, err
+		}
+	}
+	// Defensive migration: add grp to systems.
+	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN grp TEXT NOT NULL DEFAULT ''`); err != nil {
 		if !contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
@@ -113,7 +120,7 @@ func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 	var s System
 	var hostID, agentToken, enrollToken, machineUUID sql.NullString
 	err := row.Scan(&s.ID, &s.Label, &s.Role, &s.OS, &s.Arch, &s.Kind, &hostID,
-		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &enrollToken, &s.Created, &machineUUID)
+		&s.Status, &s.AgentVersion, &s.AgentStatus, &s.LastSeen, &agentToken, &enrollToken, &s.Created, &machineUUID, &s.Grp)
 	s.HostID = hostID.String
 	s.AgentToken = agentToken.String
 	s.EnrollToken = enrollToken.String
@@ -121,7 +128,7 @@ func scanSystem(row interface{ Scan(...any) error }) (System, error) {
 	return s, err
 }
 
-const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,enroll_token,created,machine_uuid"
+const cols = "id,label,role,os,arch,kind,host_id,status,agent_version,agent_status,last_seen,agent_token,enroll_token,created,machine_uuid,grp"
 
 func (s *Store) SystemByID(id string) (System, error) {
 	row := s.db.QueryRow("SELECT "+cols+" FROM systems WHERE id=?", id)
@@ -322,6 +329,19 @@ func (s *Store) UpdateSystem(id, label, role string) error {
 	}
 	// role only
 	res, err := s.db.Exec(`UPDATE systems SET role=? WHERE id=?`, role, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// SetSystemGroup sets the machine's group; empty string clears it (= ungrouped /
+// for VMs: inherit host).
+func (s *Store) SetSystemGroup(id, grp string) error {
+	res, err := s.db.Exec(`UPDATE systems SET grp=? WHERE id=?`, grp, id)
 	if err != nil {
 		return err
 	}
