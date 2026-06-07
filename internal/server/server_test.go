@@ -15,7 +15,9 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	return New(st, "s3cret"), st
+	srv := New(st, "s3cret")
+	srv.writableCheckFn = func() error { return nil }
+	return srv, st
 }
 
 func TestHealth(t *testing.T) {

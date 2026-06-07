@@ -15,21 +15,22 @@ import (
 )
 
 type Server struct {
-	st           *store.Store
-	enrollSecret string
-	invMu        sync.RWMutex
-	inv          inventory.Inventory
-	invPath      string
-	onCheck      func()
-	mux          *http.ServeMux
-	version      string
-	latestFn     func() (string, error)
-	upgradeFn    func() (bool, error)
-	exitFn       func()
-	latestMu     sync.Mutex
-	latestCache  string
-	latestAt     time.Time
-	upgrading    atomic.Bool
+	st              *store.Store
+	enrollSecret    string
+	invMu           sync.RWMutex
+	inv             inventory.Inventory
+	invPath         string
+	onCheck         func()
+	mux             *http.ServeMux
+	version         string
+	latestFn        func() (string, error)
+	upgradeFn       func() (bool, error)
+	exitFn          func()
+	writableCheckFn func() error
+	latestMu        sync.Mutex
+	latestCache     string
+	latestAt        time.Time
+	upgrading       atomic.Bool
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
@@ -43,6 +44,7 @@ func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Invent
 		return defaultUpgrade(s.version)
 	}
 	s.exitFn = func() { os.Exit(0) }
+	s.writableCheckFn = defaultWritableCheck
 	s.routes()
 	return s
 }

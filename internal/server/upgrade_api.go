@@ -31,6 +31,18 @@ func defaultUpgrade(current string) (bool, error) {
 	return selfupdate.Run(hc, "https://api.github.com", cockpitRepo(), current, "")
 }
 
+func defaultWritableCheck() error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(exe, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 func (s *Server) isDevBuild() bool {
 	return s.version == "" || s.version == "0.0.0-dev"
 }
@@ -88,6 +100,11 @@ func (s *Server) apiServerUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 	if !s.upgrading.CompareAndSwap(false, true) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "upgrade already in progress"})
+		return
+	}
+	if err := s.writableCheckFn(); err != nil {
+		s.upgrading.Store(false)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "binary not writable by server process; run: sudo chown <service-user> <binary>; " + err.Error()})
 		return
 	}
 

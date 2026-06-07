@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -144,6 +145,30 @@ func TestServerUpgradeError(t *testing.T) {
 	rec2 := doJSON(t, srv, "POST", "/api/server/upgrade", "")
 	if rec2.Code != 500 {
 		t.Fatalf("lock should be released after error, got %d %s", rec2.Code, rec2.Body.String())
+	}
+}
+
+func TestServerUpgradeBinaryNotWritable(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.2.1")
+	called := false
+	srv.writableCheckFn = func() error {
+		return errBoom
+	}
+	srv.upgradeFn = func() (bool, error) {
+		called = true
+		return true, nil
+	}
+
+	rec := doJSON(t, srv, "POST", "/api/server/upgrade", "")
+	if rec.Code != 500 {
+		t.Fatalf("writable check: %d %s", rec.Code, rec.Body.String())
+	}
+	if called {
+		t.Fatal("upgradeFn must not be called when binary is not writable")
+	}
+	if !strings.Contains(rec.Body.String(), "binary not writable") {
+		t.Fatalf("missing actionable error: %s", rec.Body.String())
 	}
 }
 
