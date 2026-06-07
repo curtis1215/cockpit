@@ -17,6 +17,14 @@
    *   所有 kind==="vm" 且 host_id 在 MACHINE_META 的，歸到對應 host。
    *   host 不在清單裡的 VM → orphanVMs（正常渲染，不巢狀）。
    */
+
+  /* ---- 群組過濾：render 時依全域切換器判斷機器可見性 ---- */
+  const grpVisible = (id) => {
+    const m = MACHINE_META[id];
+    if (!m) return false;
+    return !window.CockpitGroups || window.CockpitGroups.matches(m.effective_group || "");
+  };
+
   function buildVmGroups() {
     const vmsByHost = {};
     const orphanVMs = [];
@@ -25,8 +33,9 @@
       const m = MACHINE_META[id];
       if (!m || m.kind !== "vm") return;
       vmIds.add(id);
+      if (!grpVisible(id)) return; // 群組外的 VM 不渲染
       const hid = m.host_id;
-      if (hid && MACHINE_META[hid]) {
+      if (hid && MACHINE_META[hid] && grpVisible(hid)) {
         if (!vmsByHost[hid]) vmsByHost[hid] = { linked: [], unlinked: [] };
         if (m.status === "pending") {
           vmsByHost[hid].unlinked.push(id);
@@ -47,7 +56,7 @@
   function buildRenderOrder() {
     ({ vmsByHost, orphanVMs, vmIds } = buildVmGroups());
     const order = [];
-    const nonVmHosts = MACHINE_ORDER.filter((id) => !vmIds.has(id));
+    const nonVmHosts = MACHINE_ORDER.filter((id) => !vmIds.has(id) && grpVisible(id));
     nonVmHosts.forEach((id) => {
       order.push({ id, role: "host" });
       const grp = vmsByHost[id];
@@ -458,11 +467,18 @@
       }
     }
     $("#col-machines").innerHTML = machineColParts.join("");
-    $("#col-services").innerHTML = services.map(serviceNode).join("");
-    $("#col-software").innerHTML = currentSoftware().map(softwareNode).join("");
-    $("#c-machine").textContent = MACHINE_ORDER.length;
-    $("#c-service").textContent = services.length;
-    $("#c-software").textContent = software.length;
+    const labelToId = {};
+    MACHINE_ORDER.forEach((mid) => { const mm = MACHINE_META[mid]; if (mm) labelToId[mm.label] = mid; });
+    const visServices = services.filter((sv) => grpVisible(sv.machine));
+    const visSoftware = currentSoftware().filter((it) => {
+      const mid = labelToId[it.machine] || it.machine;
+      return grpVisible(mid);
+    });
+    $("#col-services").innerHTML = visServices.map(serviceNode).join("");
+    $("#col-software").innerHTML = visSoftware.map(softwareNode).join("");
+    $("#c-machine").textContent = MACHINE_ORDER.filter(grpVisible).length;
+    $("#c-service").textContent = visServices.length;
+    $("#c-software").textContent = visSoftware.length;
     applyGrouping();
     applyCollapse();
   }
@@ -858,13 +874,19 @@
      摘要 + 只看有問題
      ============================================================ */
   function renderSummary() {
-    const onM = MACHINE_ORDER.filter((id) => machineHealth(id) === "online").length;
-    const offM = MACHINE_ORDER.filter((id) => machineHealth(id) === "offline").length;
-    const runS = services.filter((s) => s.status === "running").length;
-    const behindW = INSTALLS.filter((i) => i.status === "behind").length;
+    const visM = MACHINE_ORDER.filter(grpVisible);
+    const visMSet = new Set(visM);
+    const labelToId = {};
+    MACHINE_ORDER.forEach((mid) => { const mm = MACHINE_META[mid]; if (mm) labelToId[mm.label] = mid; });
+    const visServices = services.filter((s) => visMSet.has(s.machine));
+    const visInstalls = INSTALLS.filter((i) => visMSet.has(labelToId[i.machine] || i.machine));
+    const onM = visM.filter((id) => machineHealth(id) === "online").length;
+    const offM = visM.filter((id) => machineHealth(id) === "offline").length;
+    const runS = visServices.filter((s) => s.status === "running").length;
+    const behindW = visInstalls.filter((i) => i.status === "behind").length;
     $("#summary").innerHTML = `
-      <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-online"></span>${onM}/${MACHINE_ORDER.length} 機器線上</span>
-      <span style="display:flex; align-items:center; gap:6px;">${runS}/${services.length} 服務運行</span>
+      <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-online"></span>${onM}/${visM.length} 機器線上</span>
+      <span style="display:flex; align-items:center; gap:6px;">${runS}/${visServices.length} 服務運行</span>
       <span style="display:flex; align-items:center; gap:6px;"><span class="sdot s-warn"></span>${behindW} 軟體可更新</span>
       ${offM?`<span style="display:flex; align-items:center; gap:6px; color:var(--err);"><span class="sdot s-offline"></span>${offM} 離線</span>`:""}`;
   }
@@ -965,4 +987,7 @@
   new ResizeObserver(onResize).observe(topo);
   window.addEventListener("resize", onResize);
   window.addEventListener("topo:refresh", () => { renderAll(); renderSummary(); drawEdges(); });
+  if (window.CockpitGroups) {
+    window.CockpitGroups.onChange(() => { renderAll(); renderSummary(); drawEdges(); });
+  }
 })();
