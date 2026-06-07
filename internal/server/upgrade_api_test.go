@@ -215,3 +215,33 @@ type httptestResult struct {
 	code int
 	body string
 }
+
+func TestVersionDevBuildSkipsLatest(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.0.0-dev")
+	called := false
+	srv.latestFn = func() (string, error) { called = true; return "9.9.9", nil }
+	rec := doJSON(t, srv, "GET", "/api/version", "")
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if called || resp["update_available"] != false {
+		t.Fatalf("dev build must not query github: called=%v resp=%v", called, resp)
+	}
+}
+
+func TestServerUpgradeDevBuild(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.SetVersion("0.0.0-dev")
+	if rec := doJSON(t, srv, "POST", "/api/server/upgrade", ""); rec.Code != 400 {
+		t.Fatalf("dev build: %d, want 400", rec.Code)
+	}
+}
+
+func TestServerUpgradeMethodNotAllowed(t *testing.T) {
+	srv, _ := newTestServer(t)
+	if rec := doJSON(t, srv, "GET", "/api/server/upgrade", ""); rec.Code != 405 {
+		t.Fatalf("GET: %d, want 405", rec.Code)
+	}
+}

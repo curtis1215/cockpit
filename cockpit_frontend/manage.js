@@ -676,7 +676,7 @@
       const oldVersion = serverVersion;
       upgradeBtn.disabled = true;
       try {
-        toast("info", "升級中… server 將會重啟");
+        toast("ok", "升級中… server 將會重啟");
         const res = await api("/api/server/upgrade", { method: "POST" });
         if (res && res.status === "up_to_date") {
           toast("ok", "Server 已是最新版本");
@@ -686,6 +686,7 @@
         const vr = await pollServerRestart(oldVersion, Date.now() + 120000);
         if (vr && vr.version) {
           toast("ok", `已升級到 v${vr.version}`);
+          await loadAll();
         } else {
           toast("warn", "升級已觸發，但尚未確認新版本；請稍後重新整理");
         }

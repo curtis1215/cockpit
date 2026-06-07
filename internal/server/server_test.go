@@ -17,6 +17,7 @@ func newTestServer(t *testing.T) (*Server, *store.Store) {
 	t.Cleanup(func() { st.Close() })
 	srv := New(st, "s3cret")
 	srv.writableCheckFn = func() error { return nil }
+	srv.latestFn = func() (string, error) { return "", nil } // 不打真實 GitHub
 	return srv, st
 }
 
