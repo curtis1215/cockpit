@@ -639,12 +639,65 @@
   // ── Init ───────────────────────────────────────────────────────────────────
   initTheme();
   // 顯示 server 版本（best-effort）並存入 serverVersion
-  api("/api/version").then((vr) => {
-    const el = document.getElementById("server-ver");
-    if (vr && vr.version) {
-      serverVersion = vr.version;
-      if (el) el.textContent = vr.version;
+  function refreshServerVersion() {
+    return api("/api/version").then((vr) => {
+      const el = document.getElementById("server-ver");
+      if (vr && vr.version) {
+        serverVersion = vr.version;
+        if (el) el.textContent = vr.version;
+      }
+      const btn = document.getElementById("server-upgrade-btn");
+      if (btn) {
+        if (vr && vr.update_available) {
+          btn.textContent = `↑ 升級 Server 到 v${vr.latest}`;
+          btn.style.display = "inline-flex";
+        } else {
+          btn.style.display = "none";
+        }
+      }
+      return vr;
+    }).catch(() => null);
+  }
+
+  async function pollServerRestart(oldVersion, deadline) {
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      const vr = await refreshServerVersion();
+      if (vr && vr.version && vr.version !== oldVersion) return vr;
+      if (vr && vr.update_available === false && vr.latest && vr.version === vr.latest) return vr;
     }
-  }).catch(() => {});
+    return null;
+  }
+
+  const upgradeBtn = document.getElementById("server-upgrade-btn");
+  if (upgradeBtn) {
+    upgradeBtn.addEventListener("click", async () => {
+      if (!confirm("升級會重啟 server（約 10–30 秒），確定？")) return;
+      const oldVersion = serverVersion;
+      upgradeBtn.disabled = true;
+      try {
+        toast("info", "升級中… server 將會重啟");
+        const res = await api("/api/server/upgrade", { method: "POST" });
+        if (res && res.status === "up_to_date") {
+          toast("ok", "Server 已是最新版本");
+          await refreshServerVersion();
+          return;
+        }
+        const vr = await pollServerRestart(oldVersion, Date.now() + 120000);
+        if (vr && vr.version) {
+          toast("ok", `已升級到 v${vr.version}`);
+        } else {
+          toast("warn", "升級已觸發，但尚未確認新版本；請稍後重新整理");
+        }
+      } catch (e) {
+        toast("err", "Server 升級失敗：" + (e.message || e));
+      } finally {
+        upgradeBtn.disabled = false;
+        refreshServerVersion();
+      }
+    });
+  }
+
+  refreshServerVersion();
   loadAll();
 })();
