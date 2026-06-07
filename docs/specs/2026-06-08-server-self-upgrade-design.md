@@ -56,9 +56,12 @@ Server struct 注入兩個函式欄位（建構時給預設值）：
   - `200 up_to_date` → toast「已是最新版」；`409` → toast「升級已在進行」；`500` → toast 顯示錯誤訊息
 - 其他頁面不加按鈕（管理頁是唯一管理入口）
 
-## 3. 部署前提與 install/setup 調整
+## 3. 部署前提
 
-- **前提**：serve 的 binary 必須是 service user 可寫。`cockpit setup serve` 安裝/重裝服務時，若 binary 擁有者 ≠ service user → 自動 `chown <service-user> <binary>`（setup 本來就以 root 執行；失敗僅警告不中斷）
+- **前提**：serve 的 binary 必須是 serve 行程可寫。預設安裝（service 以 root 跑）天然滿足；只有**手動降權**過的安裝（如 mac-mini plist `UserName=curtis`）需要一次性 `sudo chown <user> /usr/local/bin/cockpit`
+- 不改 `cockpit setup serve`（預設 root 情境 chown 是 no-op，YAGNI）；改以兩道提示兜底：
+  1. upgrade 端點執行前 pre-check binary 可寫性，不可寫 → `500 {"error":"binary not writable by server process; run: sudo chown <user> <path>"}`（帶實際 user 與 path）
+  2. `cockpit doctor` 的 serve 段加檢查：service user 對 binary 不可寫時印警告與 chown 指令
 - mac-mini 一次性手動處理：`sudo chown curtis /usr/local/bin/cockpit`
 - Linux systemd：unit 已有 `Restart` + `RestartSec=5`，無需變更
 
