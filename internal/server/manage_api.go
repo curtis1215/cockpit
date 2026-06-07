@@ -113,9 +113,10 @@ func (s *Server) patchSystem(w http.ResponseWriter, r *http.Request, id string) 
 		writeJSON(w, 500, map[string]string{"error": err.Error()})
 		return
 	}
+	eff := effectiveGroups(rows)
 	for _, x := range rows {
 		if x.ID == id {
-			writeJSON(w, 200, systemMap(x))
+			writeJSON(w, 200, systemMap(x, eff[x.ID]))
 			return
 		}
 	}

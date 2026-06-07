@@ -231,3 +231,93 @@ func TestPatchAndDelete(t *testing.T) {
 		}
 	}
 }
+
+// ── group / effective_group ──────────────────────────────────────────────────
+
+func TestSystemsGroupAndEffectiveGroup(t *testing.T) {
+	srv, st := vtServer(t)
+
+	// host 設群組「工作」
+	hostID, _, err := st.CreateSystemPending("ghost1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSystemGroup(hostID, "工作"); err != nil {
+		t.Fatal(err)
+	}
+	// guest1：VM、未覆寫 → 繼承 host
+	guest1, _, err := st.CreateSystemPending("gguest1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVM(hostID, "uuid-g1", guest1); err != nil {
+		t.Fatal(err)
+	}
+	// guest2：VM、覆寫成「個人」
+	guest2, _, err := st.CreateSystemPending("gguest2", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVM(hostID, "uuid-g2", guest2); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SetSystemGroup(guest2, "個人"); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := doJSON(t, srv, "GET", "/api/systems", "")
+	if rec.Code != 200 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body.String())
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	find := func(id string) map[string]any {
+		for _, m := range list {
+			if m["id"] == id {
+				return m
+			}
+		}
+		t.Fatalf("system %s not in list", id)
+		return nil
+	}
+	h := find(hostID)
+	if h["group"] != "工作" || h["effective_group"] != "工作" {
+		t.Fatalf("host: group=%v eff=%v", h["group"], h["effective_group"])
+	}
+	g1 := find(guest1)
+	if g1["group"] != "" || g1["effective_group"] != "工作" {
+		t.Fatalf("guest1 should inherit: group=%v eff=%v", g1["group"], g1["effective_group"])
+	}
+	g2 := find(guest2)
+	if g2["group"] != "個人" || g2["effective_group"] != "個人" {
+		t.Fatalf("guest2 should override: group=%v eff=%v", g2["group"], g2["effective_group"])
+	}
+}
+
+func TestEffectiveGroupHostMissing(t *testing.T) {
+	srv, st := vtServer(t)
+	// VM 的 host 不存在（懸空 host_id）→ effective_group 視為未分組
+	guest, _, err := st.CreateSystemPending("orphanvm", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.LinkVM("sys_ghosthost", "uuid-x", guest); err != nil {
+		t.Fatal(err)
+	}
+	rec := doJSON(t, srv, "GET", "/api/systems", "")
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range list {
+		if m["id"] == guest {
+			if m["effective_group"] != "" {
+				t.Fatalf("orphan vm eff = %v, want empty", m["effective_group"])
+			}
+			return
+		}
+	}
+	t.Fatal("guest not found")
+}

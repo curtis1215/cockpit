@@ -332,12 +332,43 @@ func liveStatus(x store.SystemWithLatest) string {
 	return "online"
 }
 
+// effectiveGroups resolves each system's effective group: its own grp wins;
+// an unset grp on a VM inherits from its host (follows host chains, cycle-safe).
+func effectiveGroups(rows []store.SystemWithLatest) map[string]string {
+	type node struct{ grp, kind, hostID string }
+	nodes := make(map[string]node, len(rows))
+	for _, x := range rows {
+		nodes[x.ID] = node{grp: x.Grp, kind: x.Kind, hostID: x.HostID}
+	}
+	var resolve func(id string, seen map[string]bool) string
+	resolve = func(id string, seen map[string]bool) string {
+		n, ok := nodes[id]
+		if !ok || seen[id] {
+			return ""
+		}
+		if n.grp != "" {
+			return n.grp
+		}
+		if n.kind == "vm" && n.hostID != "" {
+			seen[id] = true
+			return resolve(n.hostID, seen)
+		}
+		return ""
+	}
+	eff := make(map[string]string, len(rows))
+	for _, x := range rows {
+		eff[x.ID] = resolve(x.ID, map[string]bool{})
+	}
+	return eff
+}
+
 // systemMap produces the enriched JSON object for a system.
-func systemMap(x store.SystemWithLatest) map[string]any {
+func systemMap(x store.SystemWithLatest, eff string) map[string]any {
 	st := liveStatus(x)
 	return map[string]any{
 		"id": x.ID, "label": x.Label, "role": x.Role, "os": x.OS, "arch": x.Arch,
 		"kind": x.Kind, "host_id": x.HostID, "status": st,
+		"group": x.Grp, "effective_group": eff,
 		"agent_version": x.AgentVersion, "agent_status": x.AgentStatus,
 		"last_seen": x.LastSeen,
 		"cpu":       fv2(x.Latest.CPU), "mem": fv2(x.Latest.Mem), "disk": fv2(x.Latest.Disk),
@@ -356,9 +387,10 @@ func (s *Server) apiSystemsEnriched(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
+		eff := effectiveGroups(rows)
 		out := []map[string]any{}
 		for _, x := range rows {
-			out = append(out, systemMap(x))
+			out = append(out, systemMap(x, eff[x.ID]))
 		}
 		writeJSON(w, 200, out)
 	case http.MethodPost:
@@ -462,7 +494,8 @@ func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sub == "" {
-		writeJSON(w, 200, systemMap(*found))
+		eff := effectiveGroups(rows)
+		writeJSON(w, 200, systemMap(*found, eff[found.ID]))
 		return
 	}
 
