@@ -103,7 +103,7 @@ if (typeof module !== "undefined" && module.exports) {
 
 ## 5. 測試計畫（`cockpit_frontend/topo-state.test.js`，node:test）
 
-執行：`node --test cockpit_frontend/`
+執行：`node --test cockpit_frontend/*.test.js`
 
 1. **參考穩定性（鎖死 bug）**：對同一 `target` 物件呼叫 `applyObjectInPlace` 兩次（內容不同），assert 回傳值 `===` 原 target、且持有舊參考的變數能看到新內容。
 2. **key 移除**：第一次有 key `a,b`，第二次只有 `a`，assert `b` 從 target 消失。
@@ -114,7 +114,7 @@ if (typeof module !== "undefined" && module.exports) {
 
 ## 6. 驗收標準
 
-- `node --test cockpit_frontend/` 全綠。
+- `node --test cockpit_frontend/*.test.js` 全綠。
 - `go test ./...` 不受影響（無 Go 變更）。
 - 手動：拓樸頁 / 機器頁不重整，≤15 秒內 CPU/MEM 等當前值自動跳動；服務狀態、軟體版本同樣自動更新。
 

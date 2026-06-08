@@ -30,7 +30,7 @@
 
 - [ ] **Step 1: 確認測試目前為 red**
 
-Run: `node --test cockpit_frontend/`
+Run: `node --test cockpit_frontend/*.test.js`
 Expected: FAIL（`Cannot find module './topo-state.js'`）。
 
 - [ ] **Step 2: 建立 `cockpit_frontend/topo-state.js`**
@@ -83,7 +83,7 @@ Expected: FAIL（`Cannot find module './topo-state.js'`）。
 
 - [ ] **Step 3: 跑測試確認全綠**
 
-Run: `node --test cockpit_frontend/`
+Run: `node --test cockpit_frontend/*.test.js`
 Expected: PASS，`# pass 6 # fail 0`。
 
 - [ ] **Step 4: Commit**
@@ -154,7 +154,7 @@ Expected: `window.TOPO`/`window.MOCK` 各只剩頂層那一次 assign；無 `, 3
 
 - [ ] **Step 6: 測試仍綠（api-data.js 未被 node 測試直接載入，但確保沒破壞測試套件）**
 
-Run: `node --test cockpit_frontend/`
+Run: `node --test cockpit_frontend/*.test.js`
 Expected: PASS，`# pass 6 # fail 0`。
 
 - [ ] **Step 7: Commit**
@@ -205,7 +205,7 @@ git commit -m "fix(web): load topo-state.js before api-data.js on machine/topolo
 
 - [ ] **Step 1: 前端測試全綠**
 
-Run: `node --test cockpit_frontend/`
+Run: `node --test cockpit_frontend/*.test.js`
 Expected: `# pass 6 # fail 0`。
 
 - [ ] **Step 2: 後端不受影響**

@@ -2,7 +2,7 @@
    cockpit · topo-state.test.js — node:test 零依賴
    鎖死 stale-reference bug：loadAll 必須原地更新同一個共享狀態
    物件，topo.js / trends.js 頂層解構的參考才能看到新一輪資料。
-   執行：node --test cockpit_frontend/
+   執行：node --test cockpit_frontend/*.test.js
    ============================================================= */
 const { test } = require("node:test");
 const assert = require("node:assert/strict");

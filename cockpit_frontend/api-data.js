@@ -345,27 +345,18 @@ async function loadAll() {
       }
     });
 
-    /* ── 發佈 window.TOPO / window.MOCK ── */
+    /* ── 原地更新共享狀態：穩定參考，topo.js/trends.js 頂層解構即見新值（見 topo-state.js）。
+       window.TOPO / window.MOCK 已於頂層 assign 一次，此處不可再 reassign。 ── */
     applyObjectInPlace(MACHINE_META, nextMeta);
     applyArrayInPlace(MACHINE_ORDER, nextOrder);
     applyArrayInPlace(SERVICES, nextServices);
     applyArrayInPlace(INSTALLS, nextInstalls);
-
-    window.TOPO = { MACHINE_META, MACHINE_ORDER, SERVICES };
 
     /* ── 群組切換器：以 effective_group 集合初始化 ── */
     if (window.CockpitGroups) {
       const effs = nextOrder.map((id) => (nextMeta[id] || {}).effective_group || "");
       window.CockpitGroups.init(effs.filter(Boolean), effs.some((g) => !g));
     }
-
-    window.MOCK = {
-      INSTALLS,
-      // topo.js 也需要 VERSIONS / JOB_SCRIPTS（詳情抽屜用）
-      // 真實後端尚無這兩個端點；提供空殼以防止解構失敗
-      VERSIONS: {},
-      JOB_SCRIPTS: {},
-    };
 
     /* ── machine.html：預先快取 4 個 range 的 metrics ── */
     if (IS_MACHINE) {
