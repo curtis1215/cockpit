@@ -34,6 +34,11 @@ func RefreshUpstream(s *store.Store, inv inventory.Inventory, fetch FetchFunc, t
 		}
 		if zh == "" && latest.ChangelogRaw != "" {
 			zh = translate(latest.ChangelogRaw)
+			if zh == "" {
+				// 翻譯靜默失敗（codex/claude 逾時或暫時性錯誤）：留下 error event，
+				// 否則此版本會無中文且無從察覺。下次 refresh 仍會重試翻譯。
+				s.AddEvent("error", sw.Name, "", fmt.Sprintf("translate failed (raw %d bytes)", len(latest.ChangelogRaw)))
+			}
 		}
 		s.AddVersion(sw.Name, latest.Version, "", latest.ChangelogRaw, zh)
 	}
