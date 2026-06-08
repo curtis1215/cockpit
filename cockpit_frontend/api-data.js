@@ -157,6 +157,15 @@
       if (el && v && v.version) el.textContent = "v" + v.version;
     } catch (_) {}
   }
+// 共享監控狀態：穩定參考，loadAll 每輪原地更新內容（修 stale-ref，見 topo-state.js）
+const MACHINE_META = {};
+const MACHINE_ORDER = [];
+const SERVICES = [];
+const INSTALLS = [];
+const { applyObjectInPlace, applyArrayInPlace, REFRESH_INTERVAL_MS } = window.CockpitTopoState;
+window.TOPO = { MACHINE_META, MACHINE_ORDER, SERVICES };
+window.MOCK = { INSTALLS, VERSIONS: {}, JOB_SCRIPTS: {} };
+
 async function loadAll() {
     /* 1. 共用資料 */
     const [systems, services, vms, installs] = await Promise.all([
@@ -166,19 +175,19 @@ async function loadAll() {
       api("/api/installs"),
     ]);
 
-    /* ── MACHINE_META ── */
-    const MACHINE_META = {};
-    const MACHINE_ORDER = [];
+    /* ── nextMeta ── */
+    const nextMeta = {};
+    const nextOrder = [];
 
     // 先依 label 排序 systems
     const sortedSystems = [...systems].sort((a, b) => a.label.localeCompare(b.label));
 
     sortedSystems.forEach((sys) => {
       const id = sys.id;
-      MACHINE_ORDER.push(id);
+      nextOrder.push(id);
 
       const netNull = sys.net_up == null && sys.net_down == null;
-      MACHINE_META[id] = {
+      nextMeta[id] = {
         label:        sys.label || id,
         role:         sys.role  || "",
         os:           sys.os    || "—",
@@ -217,16 +226,16 @@ async function loadAll() {
         const hostSys = systems.find((s) => s.id === vm.host_system_id);
         const hostLabel = hostSys ? hostSys.label : (vm.host_system_id || "未知主機");
 
-        if (vm.linked_system_id && MACHINE_META[vm.linked_system_id]) {
+        if (vm.linked_system_id && nextMeta[vm.linked_system_id]) {
           // linked VM 已在 systems 裡，補充 role，記錄 host mapping
-          const existing = MACHINE_META[vm.linked_system_id];
-          MACHINE_META[vm.linked_system_id] = { ...existing, role: `VM @ ${hostLabel}` };
+          const existing = nextMeta[vm.linked_system_id];
+          nextMeta[vm.linked_system_id] = { ...existing, role: `VM @ ${hostLabel}` };
           window._vmsByLinkedSystem[vm.linked_system_id] = vm;
         } else if (!vm.linked_system_id) {
           // unlinked VM → pending 機器卡，附帶原始 vm 資料供手動連結
           const pendingId = "vm_" + (vm.uuid || vm.host_system_id);
-          if (!MACHINE_META[pendingId]) {
-            MACHINE_META[pendingId] = {
+          if (!nextMeta[pendingId]) {
+            nextMeta[pendingId] = {
               label:           vm.name || pendingId,
               role:            "未連線 VM @ " + hostLabel,
               os:              vm.guest_os || "—",
@@ -248,7 +257,7 @@ async function loadAll() {
               group:           "",
               effective_group: hostSys ? (hostSys.effective_group || "") : "",
             };
-            MACHINE_ORDER.push(pendingId);
+            nextOrder.push(pendingId);
           }
         }
       });
@@ -261,8 +270,8 @@ async function loadAll() {
     // Expose raw systems list for the link dropdown
     window._allSystems = systems;
 
-    /* ── INSTALLS（形狀與 mock-data.js 相同）── */
-    const INSTALLS = Array.isArray(installs) ? installs.map((r) => ({
+    /* ── nextInstalls（形狀與 mock-data.js 相同）── */
+    const nextInstalls = Array.isArray(installs) ? installs.map((r) => ({
       id:              r.id,
       software:        r.software,
       kind:            r.kind,
@@ -275,14 +284,14 @@ async function loadAll() {
       error:           r.error            || undefined,
     })) : [];
 
-    /* ── SERVICES ── */
+    /* ── nextServices ── */
     // 服務層：API 服務 + 每台機器的 software bundle
-    const SERVICES = [];
+    const nextServices = [];
 
     // API 服務清單 → 加工成 mock 形狀
     if (Array.isArray(services)) {
       services.forEach((svc) => {
-        SERVICES.push({
+        nextServices.push({
           id:       "svc_" + svc.system_id + "_" + svc.name.replace(/[^a-z0-9_]/gi, "_"),
           name:     svc.name,
           machine:  svc.system_id,
@@ -300,15 +309,15 @@ async function loadAll() {
     // 每台機器：若在 installs 有安裝，合成 bundle 服務
     // installs.machine 欄位對應 system label（依 API 契約）
     const systemLabelToId = {};
-    Object.entries(MACHINE_META).forEach(([id, m]) => { systemLabelToId[m.label] = id; });
+    Object.entries(nextMeta).forEach(([id, m]) => { systemLabelToId[m.label] = id; });
 
-    MACHINE_ORDER.forEach((machineId) => {
+    nextOrder.forEach((machineId) => {
       if (machineId.startsWith("vm_")) return; // pending VM 無 installs
-      const meta = MACHINE_META[machineId];
+      const meta = nextMeta[machineId];
       if (!meta) return;
 
       // installs 依 machine 欄位比對（可能是 label 或 id）
-      const machInstalls = INSTALLS.filter((i) =>
+      const machInstalls = nextInstalls.filter((i) =>
         i.machine === machineId ||
         i.machine === meta.label ||
         systemLabelToId[i.machine] === machineId
@@ -316,11 +325,11 @@ async function loadAll() {
 
       if (machInstalls.length > 0) {
         // 確認此機器還沒有 bundle 服務（避免 API services 已帶的 bundle 重複）
-        const hasBundleAlready = SERVICES.some(
+        const hasBundleAlready = nextServices.some(
           (s) => s.machine === machineId && s.kind === "bundle"
         );
         if (!hasBundleAlready) {
-          SERVICES.push({
+          nextServices.push({
             id:       "bundle_" + machineId,
             name:     "軟體",
             machine:  machineId,
@@ -337,11 +346,16 @@ async function loadAll() {
     });
 
     /* ── 發佈 window.TOPO / window.MOCK ── */
+    applyObjectInPlace(MACHINE_META, nextMeta);
+    applyArrayInPlace(MACHINE_ORDER, nextOrder);
+    applyArrayInPlace(SERVICES, nextServices);
+    applyArrayInPlace(INSTALLS, nextInstalls);
+
     window.TOPO = { MACHINE_META, MACHINE_ORDER, SERVICES };
 
     /* ── 群組切換器：以 effective_group 集合初始化 ── */
     if (window.CockpitGroups) {
-      const effs = MACHINE_ORDER.map((id) => (MACHINE_META[id] || {}).effective_group || "");
+      const effs = nextOrder.map((id) => (nextMeta[id] || {}).effective_group || "");
       window.CockpitGroups.init(effs.filter(Boolean), effs.some((g) => !g));
     }
 
@@ -358,13 +372,13 @@ async function loadAll() {
       // 決定初始機器（localStorage 或群組內第一台線上）
       const inGroup = (id) =>
         !window.CockpitGroups ||
-        window.CockpitGroups.matches((MACHINE_META[id] || {}).effective_group || "");
-      const firstOnline = MACHINE_ORDER.find(
-        (id) => MACHINE_META[id] && inGroup(id)
-          && MACHINE_META[id].status !== "offline" && MACHINE_META[id].status !== "pending"
-      ) || MACHINE_ORDER.find(inGroup) || MACHINE_ORDER[0];
+        window.CockpitGroups.matches((nextMeta[id] || {}).effective_group || "");
+      const firstOnline = nextOrder.find(
+        (id) => nextMeta[id] && inGroup(id)
+          && nextMeta[id].status !== "offline" && nextMeta[id].status !== "pending"
+      ) || nextOrder.find(inGroup) || nextOrder[0];
       const savedId = localStorage.getItem("cockpit-machine");
-      const initId  = (savedId && MACHINE_META[savedId] && inGroup(savedId)) ? savedId : firstOnline;
+      const initId  = (savedId && nextMeta[savedId] && inGroup(savedId)) ? savedId : firstOnline;
       if (initId) await prefetchMetrics(initId);
     }
 
@@ -431,5 +445,5 @@ async function loadAll() {
     } catch (err) {
       console.warn("[api-data] refresh failed:", err);
     }
-  }, 30000);
+  }, REFRESH_INTERVAL_MS);
 })();
