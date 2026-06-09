@@ -50,6 +50,29 @@ curl -fsSL https://raw.githubusercontent.com/curtis1215/cockpit/main/install.sh 
 
 貼到目標機器執行即可。agent 首次連線用 enroll token 換取正式 `agent_token`（寫回設定檔、enroll token 即作廢），之後每 15 秒回報指標、自動偵測 Docker 容器與 VMware Fusion VM、long-poll 等候更新工作。
 
+### Windows agent（PowerShell）
+
+> ✅ 已在 Windows 11（PowerShell 5.1、AMD64）實測通過：binary 安裝、agent enroll、Windows 服務（開機自啟、經 SCM dispatcher）、指標回報。**不支援/受限**：load average、溫度、GPU 指標（Windows 無對應來源）、硬體 UUID 識別（改用主機名）、VM 列舉（僅支援 macOS 的 VMware Fusion / OrbStack）。
+
+Linux/macOS 用的 `install.sh` 是 POSIX 腳本，Windows 改用 `install.ps1`。**以系統管理員身分開啟 PowerShell**（安裝服務需要），執行：
+
+```powershell
+# 下載安裝腳本
+irm https://raw.githubusercontent.com/curtis1215/cockpit/main/install.ps1 -OutFile install.ps1
+
+# 安裝並註冊為 Windows 服務（-Server / -Token 取自管理頁「新增機器」）
+.\install.ps1 -Subcommand agent -Server http://<server>:8787 -Token ck_enroll_xxxxxxxx
+```
+
+腳本會：下載對應架構的 `cockpit_<版本>_windows_<arch>.zip` → 解壓 `cockpit.exe` 到 `%ProgramFiles%\cockpit` → 設定檔寫入 `%ProgramData%\cockpit\agent.json` → 透過 Windows SCM 註冊服務並啟動。驗證：
+
+```powershell
+Get-Service cockpit*        # 應為 Running
+& "$env:ProgramFiles\cockpit\cockpit.exe" version
+```
+
+僅想產生設定、不裝服務（前景測試）：加 `-NoService`，再手動執行 `cockpit.exe agent -config %ProgramData%\cockpit\agent.json`。設定目錄可用 `-Dir` 覆寫——**勿**沿用 Linux 的 `/etc/cockpit`，在 Windows 會解析成 `C:\etc\cockpit`。
+
 ## 3. 日常操作
 
 ```sh
