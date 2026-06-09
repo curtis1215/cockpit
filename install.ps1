@@ -35,6 +35,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'  # 關閉 Invoke-WebRequest 進度條（大幅加速）
+try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch { }  # 讓繁中訊息在終端正確顯示
 
 $Repo = if ($env:COCKPIT_REPO) { $env:COCKPIT_REPO } else { 'curtis1215/cockpit' }
 

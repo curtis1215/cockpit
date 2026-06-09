@@ -15,7 +15,9 @@ func TestBuildSvcConfig_Serve(t *testing.T) {
 	if cfg.DisplayName != "Cockpit serve" {
 		t.Errorf("DisplayName = %q, want Cockpit serve", cfg.DisplayName)
 	}
-	want := []string{"serve", "-config", "/etc/cockpit/serve.json"}
+	// service ImagePath 必須走 `service run` 入口，才會呼叫 kardianos service.Run()
+	// 進入 Windows SCM dispatcher（否則 SCM 1053 逾時）。mac/linux 同樣經此入口。
+	want := []string{"service", "run", "-mode", "serve", "-config", "/etc/cockpit/serve.json"}
 	if len(cfg.Arguments) != len(want) {
 		t.Fatalf("Arguments length = %d, want %d; got %v", len(cfg.Arguments), len(want), cfg.Arguments)
 	}
@@ -34,7 +36,7 @@ func TestBuildSvcConfig_Agent(t *testing.T) {
 	if cfg.Name != "cockpit-agent" {
 		t.Errorf("Name = %q, want cockpit-agent", cfg.Name)
 	}
-	want := []string{"agent", "-config", "/etc/cockpit/agent.json"}
+	want := []string{"service", "run", "-mode", "agent", "-config", "/etc/cockpit/agent.json"}
 	for i, a := range want {
 		if cfg.Arguments[i] != a {
 			t.Errorf("Arguments[%d] = %q, want %q", i, cfg.Arguments[i], a)

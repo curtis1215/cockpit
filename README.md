@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/curtis1215/cockpit/main/install.sh 
 
 ### Windows agent（PowerShell）
 
-> ⚠️ Windows 支援為實驗性、**尚未經實機驗證**。可運作：CPU／記憶體／磁碟指標、心跳、軟體版本回報與更新。**不支援/受限**：load average、溫度、GPU 指標（Windows 無對應來源）、硬體 UUID 識別（改用主機名）、VM 列舉（僅支援 macOS 的 VMware Fusion / OrbStack）。Windows 服務安裝（kardianos SCM）尚未經 CI 驗證。
+> ✅ 已在 Windows 11（PowerShell 5.1、AMD64）實測通過：binary 安裝、agent enroll、Windows 服務（開機自啟、經 SCM dispatcher）、指標回報。**不支援/受限**：load average、溫度、GPU 指標（Windows 無對應來源）、硬體 UUID 識別（改用主機名）、VM 列舉（僅支援 macOS 的 VMware Fusion / OrbStack）。
 
 Linux/macOS 用的 `install.sh` 是 POSIX 腳本，Windows 改用 `install.ps1`。**以系統管理員身分開啟 PowerShell**（安裝服務需要），執行：
 

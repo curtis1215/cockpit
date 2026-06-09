@@ -22,7 +22,7 @@ func buildSvcConfig(mode, absCfg string) (*service.Config, error) {
 		Name:        "cockpit-" + mode,
 		DisplayName: "Cockpit " + mode,
 		Description: "cockpit homelab control plane (" + mode + ")",
-		Arguments:   []string{mode, "-config", absCfg},
+		Arguments:   []string{"service", "run", "-mode", mode, "-config", absCfg},
 		Option:      service.KeyValue{"SystemdScript": systemdUnitTemplate},
 	}, nil
 }
@@ -77,6 +77,7 @@ func runService(args []string) {
 	validActions := map[string]bool{
 		"install": true, "uninstall": true,
 		"start": true, "stop": true, "status": true,
+		"run": true, // 內部入口：由服務管理器啟動，呼叫 service.Run()（見下方）
 	}
 	if !validActions[action] {
 		log.Fatalf("service: unknown action %q (want install|uninstall|start|stop|status)", action)
@@ -112,6 +113,17 @@ func runService(args []string) {
 	s, err := service.New(prg, svcCfg)
 	if err != nil {
 		log.Fatalf("service new: %v", err)
+	}
+
+	if action == "run" {
+		// 系統服務管理器（Windows SCM / systemd / launchd）啟動服務時執行的入口。
+		// s.Run() 在 Windows 進入 SCM dispatcher 並回報 RUNNING、處理停止控制；
+		// 其他平台直接呼叫 program.Start 後阻塞等待停止訊號。
+		// 缺此入口（直接跑 agent/serve）會導致 Windows SCM 1053 逾時。
+		if err := s.Run(); err != nil {
+			log.Fatalf("service run: %v", err)
+		}
+		return
 	}
 
 	if action == "status" {
