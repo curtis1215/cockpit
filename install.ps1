@@ -12,7 +12,7 @@
 
 .NOTES
   安裝系統服務（serve / 不帶 -NoService 的 agent）需「以系統管理員身分」開啟 PowerShell。
-  ⚠️ 此腳本尚未經 Windows 實機驗證；service 安裝路徑請對照 README 的注意事項。
+  已在 Windows 11（PowerShell 5.1、AMD64）實測通過；細節見 README 的 Windows agent 段。
 
 .EXAMPLE
   # 下載後執行（要傳參數時用這種）
