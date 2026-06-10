@@ -775,16 +775,19 @@
     }
   }
 
+  const TR_RECOMMENDED_TOKENS = 4096; // reasoning 模型思考會吃 token，低於此值容易輸出空翻譯
+
   async function fetchTranslateModels() {
     const ep = trEndpoint.value.trim();
     if (!ep) { toast("warn", "請先填端點 URL"); return; }
     trFetchBtn.disabled = true;
     try {
       const r = await api("/api/translate/models?endpoint=" + encodeURIComponent(ep));
-      trModelList.innerHTML = (r.models || []).map((m) => `<option value="${m}">`).join("");
-      if (!r.models || !r.models.length) { toast("warn", "端點可連線，但沒有已載入的模型"); return; }
-      if (!trModel.value) trModel.value = r.models[0];
-      toast("ok", `已拉取 ${r.models.length} 個模型`);
+      const models = r.models || [];
+      if (!models.length) { toast("warn", "端點可連線，但沒有已載入的模型"); return; }
+      trModelList.innerHTML = models.map((m) => `<option value="${escHtml(m)}">`).join("");
+      if (!trModel.value) trModel.value = models[0];
+      toast("ok", `已拉取 ${models.length} 個模型`);
     } catch (e) {
       toast("err", "拉取模型失敗：" + e.message);
     } finally {
@@ -798,8 +801,8 @@
       model: trModel.value.trim(),
       max_tokens: parseInt(trMaxTokens.value, 10) || 0,
     };
-    if (body.endpoint && body.max_tokens > 0 && body.max_tokens < 4096 &&
-        !confirm(`Max tokens ${body.max_tokens} 低於建議值 4096，reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
+    if (body.endpoint && body.max_tokens > 0 && body.max_tokens < TR_RECOMMENDED_TOKENS &&
+        !confirm(`Max tokens ${body.max_tokens} 低於建議值 ${TR_RECOMMENDED_TOKENS}，reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
       return;
     }
     trSaveBtn.disabled = true;

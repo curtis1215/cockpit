@@ -17,6 +17,9 @@ const (
 	setTranslateMaxTokens = "translate.max_tokens"
 )
 
+// proxyClient 給 models 代理用：短 timeout、共用連線。
+var proxyClient = &http.Client{Timeout: 10 * time.Second}
+
 func (s *Server) registerTranslateAPI() {
 	s.mux.HandleFunc("/api/translate/config", s.handleTranslateConfig)
 	s.mux.HandleFunc("/api/translate/models", s.handleTranslateModels)
@@ -32,21 +35,18 @@ func (s *Server) TranslateConfig() translate.Config {
 	}
 }
 
+// validEndpointURL 驗證使用者提供的端點是 host 非空的 http(s) URL。
+func validEndpointURL(s string) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+}
+
 func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		cfg := s.TranslateConfig()
-		writeJSON(w, 200, map[string]any{
-			"endpoint":   cfg.Endpoint,
-			"model":      cfg.Model,
-			"max_tokens": cfg.MaxTokens,
-		})
+		writeJSON(w, 200, s.TranslateConfig())
 	case http.MethodPut:
-		var body struct {
-			Endpoint  string `json:"endpoint"`
-			Model     string `json:"model"`
-			MaxTokens int    `json:"max_tokens"`
-		}
+		var body translate.Config
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, 400, map[string]string{"error": "bad json"})
 			return
@@ -56,8 +56,7 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if body.Endpoint != "" {
-			u, err := url.Parse(body.Endpoint)
-			if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			if !validEndpointURL(body.Endpoint) {
 				writeJSON(w, 400, map[string]string{"error": "endpoint must be a http(s) URL"})
 				return
 			}
@@ -66,15 +65,15 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		for k, v := range map[string]string{
+		// 單一 transaction 寫入：避免中途失敗留下半套設定（endpoint 有、model 沒有），
+		// NewDynamic 每次翻譯都即時讀，半套設定會直接打出錯誤請求。
+		if err := s.st.SetSettings(map[string]string{
 			setTranslateEndpoint:  body.Endpoint,
 			setTranslateModel:     body.Model,
 			setTranslateMaxTokens: strconv.Itoa(body.MaxTokens),
-		} {
-			if err := s.st.SetSetting(k, v); err != nil {
-				writeJSON(w, 500, map[string]string{"error": err.Error()})
-				return
-			}
+		}); err != nil {
+			writeJSON(w, 500, map[string]string{"error": err.Error()})
+			return
 		}
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	default:
@@ -97,13 +96,18 @@ func (s *Server) handleTranslateModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": "endpoint required"})
 		return
 	}
-	u, err := url.Parse(endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	if !validEndpointURL(endpoint) {
 		writeJSON(w, 400, map[string]string{"error": "endpoint must be a http(s) URL"})
 		return
 	}
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Get(translate.BaseURL(endpoint) + "/v1/models")
+	// 綁 request context：瀏覽器取消/離開頁面時，對端點的探測立即中止，
+	// 不會把 dial 撐滿 10 秒 timeout。
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, translate.BaseURL(endpoint)+"/v1/models", nil)
+	if err != nil {
+		writeJSON(w, 400, map[string]string{"error": err.Error()})
+		return
+	}
+	resp, err := proxyClient.Do(req)
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": "endpoint unreachable: " + err.Error()})
 		return

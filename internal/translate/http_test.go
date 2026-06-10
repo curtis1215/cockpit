@@ -96,6 +96,22 @@ func TestHTTPEmptyContent(t *testing.T) {
 	}
 }
 
+func TestHTTPTruncatedByLength(t *testing.T) {
+	// finish_reason=length 代表輸出被 max_tokens 截斷——半句翻譯不能當成功存檔。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "被截斷的半句翻"}, "finish_reason": "length"},
+			},
+		})
+	}))
+	defer srv.Close()
+	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: "m"} }, "")
+	if out := tr.Changelog("raw"); out != "" {
+		t.Fatalf("truncated output should yield empty, got %q", out)
+	}
+}
+
 func TestHTTPServerError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
