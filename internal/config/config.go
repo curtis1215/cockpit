@@ -11,7 +11,10 @@ type ServeConfig struct {
 	EnrollSecret  string `json:"enroll_secret"`
 	InventoryPath string `json:"inventory_path"`
 	CheckHours    int    `json:"check_hours"`
-	TranslateCmd  string `json:"translate_cmd"` // changelog 翻譯指令（bash -lc 執行、stdin 餵 prompt），空=claude -p
+	// changelog 翻譯指令（bash -lc 執行、stdin 餵 prompt），空=claude -p。
+	// 注意：僅在 WebUI（manage 頁「翻譯設定」）未設定 HTTP 端點時作為 fallback；
+	// 端點存在 DB settings，會覆蓋此設定。
+	TranslateCmd string `json:"translate_cmd"`
 }
 
 type AgentConfig struct {
