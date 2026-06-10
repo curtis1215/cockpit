@@ -777,12 +777,31 @@
 
   const TR_RECOMMENDED_TOKENS = 4096; // reasoning 模型思考會吃 token，低於此值容易輸出空翻譯
 
+  function trFormBody() {
+    return {
+      endpoint: trEndpoint.value.trim(),
+      model: trModel.value.trim(),
+      max_tokens: parseInt(trMaxTokens.value, 10) || 0,
+    };
+  }
+
+  async function putTranslateConfig(body) {
+    await api("/api/translate/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  // 拉取模型只對「已儲存的端點」進行（server 不接受任意 endpoint，避免 SSRF），
+  // 所以先把目前表單的端點存起來，再拉清單。
   async function fetchTranslateModels() {
     const ep = trEndpoint.value.trim();
     if (!ep) { toast("warn", "請先填端點 URL"); return; }
     trFetchBtn.disabled = true;
     try {
-      const r = await api("/api/translate/models?endpoint=" + encodeURIComponent(ep));
+      await putTranslateConfig(trFormBody());
+      const r = await api("/api/translate/models");
       const models = r.models || [];
       if (!models.length) { toast("warn", "端點可連線，但沒有已載入的模型"); return; }
       trModelList.innerHTML = models.map((m) => `<option value="${escHtml(m)}">`).join("");
@@ -796,22 +815,14 @@
   }
 
   async function saveTranslateConfig() {
-    const body = {
-      endpoint: trEndpoint.value.trim(),
-      model: trModel.value.trim(),
-      max_tokens: parseInt(trMaxTokens.value, 10) || 0,
-    };
+    const body = trFormBody();
     if (body.endpoint && body.max_tokens > 0 && body.max_tokens < TR_RECOMMENDED_TOKENS &&
         !confirm(`Max tokens ${body.max_tokens} 低於建議值 ${TR_RECOMMENDED_TOKENS}，reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
       return;
     }
     trSaveBtn.disabled = true;
     try {
-      await api("/api/translate/config", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      await putTranslateConfig(body);
       toast("ok", body.endpoint ? "翻譯設定已儲存（即時生效）" : "已清除端點，翻譯回退 translate_cmd");
     } catch (e) {
       toast("err", "儲存失敗：" + e.message);

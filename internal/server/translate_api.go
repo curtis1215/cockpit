@@ -55,16 +55,12 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, 400, map[string]string{"error": "max_tokens must be >= 0"})
 			return
 		}
-		if body.Endpoint != "" {
-			if !validEndpointURL(body.Endpoint) {
-				writeJSON(w, 400, map[string]string{"error": "endpoint must be a http(s) URL"})
-				return
-			}
-			if body.Model == "" {
-				writeJSON(w, 400, map[string]string{"error": "model required when endpoint is set"})
-				return
-			}
+		if body.Endpoint != "" && !validEndpointURL(body.Endpoint) {
+			writeJSON(w, 400, map[string]string{"error": "endpoint must be a http(s) URL"})
+			return
 		}
+		// model 可暫空（前端「拉取模型」會先存端點再拉清單）；翻譯端在 model 空時
+		// 走 fallback，不會用空 model 打壞請求。
 		// 單一 transaction 寫入：避免中途失敗留下半套設定（endpoint 有、model 沒有），
 		// NewDynamic 每次翻譯都即時讀，半套設定會直接打出錯誤請求。
 		if err := s.st.SetSettings(map[string]string{
@@ -82,22 +78,20 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTranslateModels 代理查詢 OpenAI 相容端點的 /v1/models（避免瀏覽器 CORS，兼連線測試）。
-// endpoint 取 query 參數，未給則用已儲存設定。
+// 只對「已儲存的端點」拉取——不接受任意 query endpoint，避免 server 被誘導探測任意內網 host
+//（SSRF）。前端需先 PUT 儲存端點再呼叫此 API。
 func (s *Server) handleTranslateModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	endpoint := r.URL.Query().Get("endpoint")
+	endpoint := s.st.GetSetting(setTranslateEndpoint)
 	if endpoint == "" {
-		endpoint = s.st.GetSetting(setTranslateEndpoint)
-	}
-	if endpoint == "" {
-		writeJSON(w, 400, map[string]string{"error": "endpoint required"})
+		writeJSON(w, 400, map[string]string{"error": "no saved endpoint; save config first"})
 		return
 	}
 	if !validEndpointURL(endpoint) {
-		writeJSON(w, 400, map[string]string{"error": "endpoint must be a http(s) URL"})
+		writeJSON(w, 400, map[string]string{"error": "saved endpoint is not a valid http(s) URL"})
 		return
 	}
 	// 綁 request context：瀏覽器取消/離開頁面時，對端點的探測立即中止，

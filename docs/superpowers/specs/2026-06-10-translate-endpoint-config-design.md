@@ -40,7 +40,7 @@ Store 新增 `GetSetting(key) string` / `SetSetting(key, value) error`。
 |---|---|---|
 | GET | `/api/translate/config` | 回 `{endpoint, model, max_tokens}` |
 | PUT | `/api/translate/config` | 驗證（URL 格式、max_tokens > 0）後寫 settings |
-| GET | `/api/translate/models?endpoint=…` | server 代理 `{endpoint}/v1/models`（避 CORS，兼連線測試），回模型 id 清單 |
+| GET | `/api/translate/models` | server 代理**已儲存端點**的 `/v1/models`（避 CORS，兼連線測試），回模型 id 清單。不接受任意 query endpoint——避免 SSRF；前端「拉取模型」會先 PUT 儲存端點再呼叫 |
 
 ### 4. WebUI（manage 頁「翻譯設定」區塊）
 

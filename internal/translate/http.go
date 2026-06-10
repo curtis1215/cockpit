@@ -31,7 +31,9 @@ func NewDynamic(cfgFn func() Config, cmd string) *Translator {
 	shell := NewWithCmd(cmd)
 	return &Translator{Run: func(prompt string) (string, error) {
 		cfg := cfgFn()
-		if strings.TrimSpace(cfg.Endpoint) == "" {
+		// endpoint 與 model 都備齊才走 HTTP；任一缺（含「只存了端點、還沒選模型」
+		// 的中間狀態）一律 fallback 到 shell，不會用空 model 打壞請求。
+		if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.Model) == "" {
 			return shell.Run(prompt)
 		}
 		return httpRun(cfg, prompt)

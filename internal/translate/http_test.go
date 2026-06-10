@@ -135,6 +135,22 @@ func TestDynamicFallbackToCmd(t *testing.T) {
 	}
 }
 
+func TestDynamicFallbackWhenModelEmpty(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
+	// endpoint 已設但 model 空（「只存端點、還沒選模型」的中間狀態）→ 必須走 shell
+	// fallback，絕不可用空 model 去打 HTTP 端點。fakeLM 若被呼叫就讓測試失敗。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("HTTP endpoint must not be called when model is empty")
+	}))
+	defer srv.Close()
+	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: ""} }, "cat")
+	if out := tr.Changelog("raw-x"); !strings.Contains(out, "raw-x") {
+		t.Fatalf("expected shell fallback output, got %q", out)
+	}
+}
+
 func TestDynamicHotSwitch(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("requires bash")
