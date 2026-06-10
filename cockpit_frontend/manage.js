@@ -756,5 +756,70 @@
     });
   }
 
+  // ── 翻譯設定 ─────────────────────────────────────────────────────────────
+  const trEndpoint  = $("#tr-endpoint");
+  const trModel     = $("#tr-model");
+  const trMaxTokens = $("#tr-max-tokens");
+  const trModelList = $("#tr-model-list");
+  const trFetchBtn  = $("#tr-fetch-models");
+  const trSaveBtn   = $("#tr-save");
+
+  async function loadTranslateConfig() {
+    try {
+      const c = await api("/api/translate/config");
+      trEndpoint.value = c.endpoint || "";
+      trModel.value = c.model || "";
+      if (c.max_tokens > 0) trMaxTokens.value = c.max_tokens;
+    } catch (e) {
+      toast("err", "翻譯設定載入失敗：" + e.message);
+    }
+  }
+
+  async function fetchTranslateModels() {
+    const ep = trEndpoint.value.trim();
+    if (!ep) { toast("warn", "請先填端點 URL"); return; }
+    trFetchBtn.disabled = true;
+    try {
+      const r = await api("/api/translate/models?endpoint=" + encodeURIComponent(ep));
+      trModelList.innerHTML = (r.models || []).map((m) => `<option value="${m}">`).join("");
+      if (!r.models || !r.models.length) { toast("warn", "端點可連線，但沒有已載入的模型"); return; }
+      if (!trModel.value) trModel.value = r.models[0];
+      toast("ok", `已拉取 ${r.models.length} 個模型`);
+    } catch (e) {
+      toast("err", "拉取模型失敗：" + e.message);
+    } finally {
+      trFetchBtn.disabled = false;
+    }
+  }
+
+  async function saveTranslateConfig() {
+    const body = {
+      endpoint: trEndpoint.value.trim(),
+      model: trModel.value.trim(),
+      max_tokens: parseInt(trMaxTokens.value, 10) || 0,
+    };
+    if (body.endpoint && body.max_tokens > 0 && body.max_tokens < 4096 &&
+        !confirm(`Max tokens ${body.max_tokens} 低於建議值 4096，reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
+      return;
+    }
+    trSaveBtn.disabled = true;
+    try {
+      await api("/api/translate/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      toast("ok", body.endpoint ? "翻譯設定已儲存（即時生效）" : "已清除端點，翻譯回退 translate_cmd");
+    } catch (e) {
+      toast("err", "儲存失敗：" + e.message);
+    } finally {
+      trSaveBtn.disabled = false;
+    }
+  }
+
+  trFetchBtn.addEventListener("click", fetchTranslateModels);
+  trSaveBtn.addEventListener("click", saveTranslateConfig);
+  loadTranslateConfig();
+
   refreshServerVersion().catch(() => {}).then(() => loadAll()); // version 失敗不可擋住頁面載入
 })();

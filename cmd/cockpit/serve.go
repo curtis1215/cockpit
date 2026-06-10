@@ -39,7 +39,8 @@ func runServe(args []string) {
 	srv.SetInventoryPath(cfg.InventoryPath)
 	srv.SetVersion(version)
 
-	tr := translate.NewWithCmd(cfg.TranslateCmd)
+	// WebUI 設定的 HTTP 端點優先（每次翻譯動態讀 DB、改完即生效），未設則 fallback 到 translate_cmd。
+	tr := translate.NewDynamic(srv.TranslateConfig, cfg.TranslateCmd)
 	// 用 srv.Inventory()（熱載後快照）而非啟動時的 inv——否則 UI 後加的軟體永遠不會被刷新。
 	refresh := func() { collector.RefreshUpstream(st, srv.Inventory(), collector.DefaultFetch, tr.Changelog) }
 	srv.OnCheck(refresh)

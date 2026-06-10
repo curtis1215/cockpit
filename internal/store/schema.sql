@@ -63,3 +63,7 @@ CREATE TABLE IF NOT EXISTS vms (
   linked_system_id TEXT, last_seen TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (host_system_id, uuid)
 );
+CREATE TABLE IF NOT EXISTS settings (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL DEFAULT ''
+);

@@ -110,6 +110,7 @@ func (s *Server) routes() {
 	s.registerMonitorAPI()
 	s.registerVersionAPI()
 	s.registerManageAPI()
+	s.registerTranslateAPI()
 	s.registerSSE()
 	sub, _ := fs.Sub(rootpkg.Frontend, "cockpit_frontend")
 	static := http.FileServer(http.FS(sub))

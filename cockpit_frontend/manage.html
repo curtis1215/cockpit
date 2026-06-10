@@ -126,6 +126,40 @@
       </div>
       <div id="software-list" class="card" style="overflow:hidden;"></div>
     </section>
+
+    <!-- 翻譯設定 -->
+    <section style="margin-top:32px;">
+      <div style="margin-bottom:12px;">
+        <h2 class="font-display" style="font-size:18px;font-weight:700;margin:0;">翻譯設定</h2>
+        <p style="font-size:12.5px;color:var(--text-3);margin:4px 0 0;">changelog 繁中翻譯使用的 OpenAI 相容端點（如 LM Studio）。未設定時沿用伺服器 translate_cmd。</p>
+      </div>
+      <div class="card" style="padding:16px;">
+        <div style="display:grid;grid-template-columns:minmax(260px,2fr) minmax(220px,2fr) minmax(110px,1fr);gap:12px;align-items:end;">
+          <div>
+            <label for="tr-endpoint" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">端點 URL</label>
+            <div style="display:flex;gap:8px;">
+              <input id="tr-endpoint" class="field mono" style="font-size:.75rem;" placeholder="http://100.73.202.65:1234" />
+              <button id="tr-fetch-models" class="btn" style="flex:none;" title="從端點拉取可用模型清單（兼連線測試）">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>拉取模型
+              </button>
+            </div>
+          </div>
+          <div>
+            <label for="tr-model" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">模型</label>
+            <input id="tr-model" class="field mono" style="font-size:.75rem;" list="tr-model-list" placeholder="拉取後選擇，或手動輸入" />
+            <datalist id="tr-model-list"></datalist>
+          </div>
+          <div>
+            <label for="tr-max-tokens" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Max tokens</label>
+            <input id="tr-max-tokens" class="field mono" style="font-size:.75rem;" type="number" min="0" step="256" value="4096" />
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;">
+          <p style="font-size:12px;color:var(--text-3);margin:0;">⚠ Max tokens 建議 ≥ 4096——reasoning 模型會先消耗思考 token，設太小會導致翻譯輸出為空。</p>
+          <button id="tr-save" class="btn btn-primary" style="flex:none;">儲存</button>
+        </div>
+      </div>
+    </section>
   </main>
 
   <!-- modal 容器 -->
