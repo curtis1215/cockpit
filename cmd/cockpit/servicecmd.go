@@ -23,7 +23,14 @@ func buildSvcConfig(mode, absCfg string) (*service.Config, error) {
 		DisplayName: "Cockpit " + mode,
 		Description: "cockpit homelab control plane (" + mode + ")",
 		Arguments:   []string{"service", "run", "-mode", mode, "-config", absCfg},
-		Option:      service.KeyValue{"SystemdScript": systemdUnitTemplate},
+		Option: service.KeyValue{
+			"SystemdScript": systemdUnitTemplate,
+			// Windows SCM recovery：自我更新後進程以 os.Exit 結束（未回報
+			// SERVICE_STOPPED，SCM 視為 failure），需 restart action 拉起新版。
+			"OnFailure":              "restart",
+			"OnFailureDelayDuration": "5s",
+			"OnFailureResetPeriod":   60,
+		},
 	}, nil
 }
 

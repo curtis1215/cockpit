@@ -44,6 +44,22 @@ func TestBuildSvcConfig_Agent(t *testing.T) {
 	}
 }
 
+// Windows SCM 預設不會在服務進程結束後重啟。agent 自我更新後以 os.Exit 結束
+// 進程（未回報 SERVICE_STOPPED，SCM 視為 failure），必須設定 OnFailure=restart
+// recovery action 才會被 SCM 拉起來，否則升級成功即服務死亡。
+func TestBuildSvcConfig_WindowsRecovery(t *testing.T) {
+	cfg, err := buildSvcConfig("agent", "/etc/cockpit/agent.json")
+	if err != nil {
+		t.Fatalf("buildSvcConfig: %v", err)
+	}
+	if got := cfg.Option["OnFailure"]; got != "restart" {
+		t.Errorf(`Option["OnFailure"] = %v, want "restart"`, got)
+	}
+	if got := cfg.Option["OnFailureDelayDuration"]; got != "5s" {
+		t.Errorf(`Option["OnFailureDelayDuration"] = %v, want "5s"`, got)
+	}
+}
+
 func TestBuildSvcConfig_InvalidMode(t *testing.T) {
 	_, err := buildSvcConfig("web", "/some/path")
 	if err == nil {

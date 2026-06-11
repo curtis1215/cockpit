@@ -2,6 +2,8 @@ package selfupdate
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -51,7 +53,11 @@ func Latest(hc *http.Client, base, repo string) (tag string, assets map[string]s
 
 // AssetName returns the expected asset filename for the given platform.
 // version should NOT have a leading "v".
+// goreleaser 的 format_overrides 對 windows 出 zip、其餘平台 tar.gz。
 func AssetName(goos, goarch, version string) string {
+	if goos == "windows" {
+		return fmt.Sprintf("cockpit_%s_%s_%s.zip", version, goos, goarch)
+	}
 	return fmt.Sprintf("cockpit_%s_%s_%s.tar.gz", version, goos, goarch)
 }
 
@@ -67,6 +73,11 @@ func AssetName(goos, goarch, version string) string {
 // Returns (true, nil) when the binary was replaced, (false, nil) when already
 // up-to-date, and (false, err) on any failure.
 func Run(hc *http.Client, base, repo, currentVersion, targetPath string) (bool, error) {
+	return RunForPlatform(hc, base, repo, currentVersion, targetPath, runtime.GOOS, runtime.GOARCH)
+}
+
+// RunForPlatform 同 Run，但平台（goos/goarch）由參數指定，供測試跨平台路徑。
+func RunForPlatform(hc *http.Client, base, repo, currentVersion, targetPath, goos, goarch string) (bool, error) {
 	if hc == nil {
 		hc = &http.Client{Timeout: 60 * time.Second}
 	}
@@ -83,7 +94,7 @@ func Run(hc *http.Client, base, repo, currentVersion, targetPath string) (bool, 
 		return false, nil
 	}
 
-	assetName := AssetName(runtime.GOOS, runtime.GOARCH, tagVer)
+	assetName := AssetName(goos, goarch, tagVer)
 	downloadURL, ok := assets[assetName]
 	if !ok {
 		return false, fmt.Errorf("no asset %q found in release %s", assetName, tag)
@@ -107,11 +118,17 @@ func Run(hc *http.Client, base, repo, currentVersion, targetPath string) (bool, 
 		return false, fmt.Errorf("download asset: HTTP %d", resp.StatusCode)
 	}
 
-	// Extract "cockpit" binary from tar.gz into a temp file alongside targetPath.
+	// Extract the cockpit binary from the archive into a temp file alongside targetPath.
 	newPath := targetPath + ".new"
-	if err := extractBinary(resp.Body, newPath); err != nil {
+	var exErr error
+	if goos == "windows" {
+		exErr = extractBinaryZip(resp.Body, newPath)
+	} else {
+		exErr = extractBinary(resp.Body, newPath)
+	}
+	if exErr != nil {
 		os.Remove(newPath)
-		return false, fmt.Errorf("extract binary: %w", err)
+		return false, fmt.Errorf("extract binary: %w", exErr)
 	}
 	if err := os.Chmod(newPath, 0755); err != nil {
 		os.Remove(newPath)
@@ -135,6 +152,41 @@ func Run(hc *http.Client, base, repo, currentVersion, targetPath string) (bool, 
 
 	fmt.Printf("cockpit 已更新至 %s\n", tagVer)
 	return true, nil
+}
+
+// extractBinaryZip reads a zip stream（zip 需要隨機存取，先整包讀進記憶體）
+// and writes the first entry named "cockpit.exe" (or ending in "/cockpit.exe")
+// to destPath.
+func extractBinaryZip(r io.Reader, destPath string) error {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return fmt.Errorf("read zip body: %w", err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("zip reader: %w", err)
+	}
+	for _, zf := range zr.File {
+		name := zf.Name
+		if name != "cockpit.exe" && !strings.HasSuffix(name, "/cockpit.exe") {
+			continue
+		}
+		rc, err := zf.Open()
+		if err != nil {
+			return fmt.Errorf("zip open entry: %w", err)
+		}
+		defer rc.Close()
+		f, err := os.Create(destPath)
+		if err != nil {
+			return fmt.Errorf("create dest file: %w", err)
+		}
+		if _, err := io.Copy(f, rc); err != nil {
+			f.Close()
+			return fmt.Errorf("write dest file: %w", err)
+		}
+		return f.Close()
+	}
+	return fmt.Errorf("binary 'cockpit.exe' not found in zip archive")
 }
 
 // extractBinary reads a gzip+tar stream and writes the first entry named
