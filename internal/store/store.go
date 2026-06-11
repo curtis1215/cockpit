@@ -587,6 +587,24 @@ func (s *Store) ListJobs(limit int) ([]Job, error) {
 	return out, nil
 }
 
+// RunningJobIDs 回傳所有 status='running' 的 job id，供孤兒 reaper 巡檢。
+func (s *Store) RunningJobIDs() ([]int64, error) {
+	rows, err := s.db.Query(`SELECT id FROM jobs WHERE status='running'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (s *Store) AppendJobLog(id int64, line string) error {
 	_, err := s.db.Exec(`UPDATE jobs SET log = log || ? || char(10) WHERE id=?`, line, id)
 	return err

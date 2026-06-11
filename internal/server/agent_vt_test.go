@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
@@ -39,6 +40,27 @@ func TestAgentVTInstallsAndPoll(t *testing.T) {
 	srv.Handler().ServeHTTP(prec2, pr2)
 	if prec2.Code != 204 {
 		t.Fatalf("empty poll want 204 got %d", prec2.Code)
+	}
+}
+
+// TestPollDoesNotClaimForDisconnectedClient: 若 agent 已斷線（request context
+// 已取消），vtPoll 不可把 queued job claim 成 running——否則 job 會變成永遠
+// 卡在 running 的孤兒（agent 根本沒收到），且 CreateJobUnique 會擋住重新觸發。
+func TestPollDoesNotClaimForDisconnectedClient(t *testing.T) {
+	srv, st := vtServer(t)
+	jid, err := st.CreateJobUnique("cc", "mac", "command", "")
+	if err != nil || jid == 0 {
+		t.Fatalf("create job: id=%d err=%v", jid, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // client 已斷線
+	pr := httptest.NewRequest("GET", "/api/agent/poll?wait=0", nil).WithContext(ctx)
+	pr.Header.Set("Authorization", "Bearer tok-mac")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, pr)
+	job, _ := st.GetJob(jid)
+	if job.Status != "queued" {
+		t.Fatalf("job claimed by dead connection: status=%q want queued (resp=%d)", job.Status, rec.Code)
 	}
 }
 

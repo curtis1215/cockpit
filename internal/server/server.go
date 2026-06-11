@@ -31,6 +31,11 @@ type Server struct {
 	latestCache     string
 	latestAt        time.Time
 	upgrading       atomic.Bool
+	// boot 與 jobSeen 供孤兒 job reaper 使用：jobSeen 記錄每個 running job
+	// 最後一次 agent 活動（claim / log / control）；server 重啟後沒有紀錄的
+	// running job 以 boot 為基準起算。
+	boot    time.Time
+	jobSeen sync.Map // map[int64]time.Time
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
@@ -38,7 +43,7 @@ func New(st *store.Store, enrollSecret string) *Server {
 }
 
 func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Inventory) *Server {
-	s := &Server{st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux()}
+	s := &Server{st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux(), boot: time.Now()}
 	s.latestFn = defaultLatestFn()
 	s.upgradeFn = func() (bool, error) {
 		return defaultUpgrade(s.version)

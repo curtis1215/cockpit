@@ -91,6 +91,21 @@ func TestPollOnce(t *testing.T) {
 	}
 }
 
+// TestPollClientTimeoutExceedsWait: long-poll 的 HTTP client timeout 必須大於
+// server 端等待秒數，否則 client 會在 server 正常回應（或回 204）前先斷線；
+// 透過代理（Cloudflare/Caddy）時 server 感知不到斷線，仍可能把 job claim 給
+// 已死的連線，造成 job 永遠卡在 running。
+func TestPollClientTimeoutExceedsWait(t *testing.T) {
+	a := &Agent{ServerURL: "http://x", Token: "tok"}
+	for _, waitSec := range []int{0, 25, 60} {
+		got := a.pollHTTP(waitSec).Timeout()
+		want := time.Duration(waitSec)*time.Second + 10*time.Second
+		if got < want {
+			t.Fatalf("poll client timeout for wait=%d: got %v, want >= %v", waitSec, got, want)
+		}
+	}
+}
+
 func TestPollOnce204(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(204)

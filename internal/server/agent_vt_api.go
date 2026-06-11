@@ -72,8 +72,15 @@ func (s *Server) vtPoll(w http.ResponseWriter, r *http.Request) {
 	}
 	deadline := time.Now().Add(time.Duration(waitSec) * time.Second)
 	for {
+		// claim 之前先確認 agent 還在線上：claim 會把 job 標成 running，
+		// 若回應寫進已斷線的連線，job 會變成永遠卡死的孤兒。
+		if r.Context().Err() != nil {
+			w.WriteHeader(204)
+			return
+		}
 		claimed, _ := jobs.ClaimNextJob(s.st, s.getInv(), machine)
 		if claimed != nil {
+			s.markJobSeen(claimed.ID)
 			writeJSON(w, 200, map[string]any{"type": "job", "job": map[string]any{
 				"id": claimed.ID, "software": claimed.Software, "machine": claimed.Machine,
 				"shell_cmd": claimed.ShellCmd, "cwd": claimed.Cwd, "current_cmd": claimed.CurrentCmd,
@@ -138,6 +145,7 @@ func (s *Server) vtJobSub(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "log":
+		s.markJobSeen(id)
 		var body struct {
 			Lines []string `json:"lines"`
 		}
@@ -154,9 +162,11 @@ func (s *Server) vtJobSub(w http.ResponseWriter, r *http.Request) {
 		}
 		json.NewDecoder(r.Body).Decode(&body)
 		jobs.RecordResult(s.st, id, body.Status, body.ExitCode, body.NewVersion)
+		s.jobSeen.Delete(id)
 		j, _ := s.st.GetJob(id)
 		writeJSON(w, 200, jobMap(j))
 	case "control":
+		s.markJobSeen(id)
 		writeJSON(w, 200, map[string]bool{"abort": s.st.AbortRequested(id)})
 	default:
 		writeJSON(w, 404, map[string]string{"error": "not found"})

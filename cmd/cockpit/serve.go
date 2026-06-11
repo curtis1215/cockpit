@@ -68,6 +68,11 @@ func runServe(args []string) {
 		}()
 	}
 
+	// 孤兒 job reaper：agent 執行中每 2 秒打一次 control，失聯 3 分鐘即可
+	// 安全判定 job 已死（claim 給斷線的連線、agent 中斷等），自動標 failed，
+	// 解除 CreateJobUnique 對重新觸發的封鎖。
+	srv.StartJobReaper(30*time.Second, 3*time.Minute)
+
 	go func() {
 		for {
 			time.Sleep(5 * time.Minute)

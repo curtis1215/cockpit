@@ -19,6 +19,9 @@ func New(base string, timeout time.Duration) *Client {
 	return &Client{base: strings.TrimRight(base, "/"), http: &http.Client{Timeout: timeout}}
 }
 
+// Timeout 回傳底層 http.Client 的整體請求逾時。
+func (c *Client) Timeout() time.Duration { return c.http.Timeout }
+
 // GetJSON 發 GET，可選 bearer；204 直接回；status>=400 回 error；否則解進 out（out 可為 nil）。
 func (c *Client) GetJSON(path, bearer string, out any) (int, error) {
 	req, err := http.NewRequest("GET", c.base+path, nil)

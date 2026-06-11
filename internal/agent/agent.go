@@ -84,11 +84,12 @@ type Agent struct {
 	// the default repo "curtis1215/cockpit". Inject in tests to avoid real network calls.
 	doUpgrade func() (bool, error)
 	// exit terminates the process. Defaults to os.Exit. Injectable for testing.
-	exit   func(int)
-	client *httpx.Client
-	col    *collect.Collector
-	docker *dockerstat.Collector
-	vmenum *vmenum.Enumerator
+	exit       func(int)
+	client     *httpx.Client
+	pollClient *httpx.Client
+	col        *collect.Collector
+	docker     *dockerstat.Collector
+	vmenum     *vmenum.Enumerator
 }
 
 func (a *Agent) c() *httpx.Client {
@@ -96,6 +97,17 @@ func (a *Agent) c() *httpx.Client {
 		a.client = httpx.New(a.ServerURL, 20*time.Second)
 	}
 	return a.client
+}
+
+// pollHTTP 回傳 long-poll 專用 client：timeout 必須大於 server 端等待秒數
+// （waitSec），否則 client 會在 server 正常回應前先斷線；經代理時 server 感知
+// 不到斷線，可能把 job claim 給已死的連線，造成 job 永遠卡在 running。
+func (a *Agent) pollHTTP(waitSec int) *httpx.Client {
+	timeout := time.Duration(waitSec)*time.Second + 15*time.Second
+	if a.pollClient == nil || a.pollClient.Timeout() < timeout {
+		a.pollClient = httpx.New(a.ServerURL, timeout)
+	}
+	return a.pollClient
 }
 
 // defaultDoUpgrade returns the default upgrade func: wraps selfupdate.Run with
@@ -199,7 +211,7 @@ type pollResp struct {
 // pollOnce 長輪詢一次：回 ("",_,nil) 表示無工作（204）。
 func (a *Agent) pollOnce(waitSec int) (string, Job, error) {
 	var pr pollResp
-	code, err := a.c().GetJSON(fmt.Sprintf("/api/agent/poll?wait=%d", waitSec), a.Token, &pr)
+	code, err := a.pollHTTP(waitSec).GetJSON(fmt.Sprintf("/api/agent/poll?wait=%d", waitSec), a.Token, &pr)
 	if err != nil {
 		return "", Job{}, err
 	}
