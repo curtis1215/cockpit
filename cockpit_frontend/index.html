@@ -6,11 +6,8 @@
 <title>cockpit · 版本追蹤器</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 
-<!-- Tailwind (CDN，prototype 用；正式環境改本地 build) -->
-<script src="https://cdn.tailwindcss.com"></script>
-<script>
-  tailwind.config = { darkMode: "class", theme: { extend: {} } };
-</script>
+<!-- Tailwind（本地 build；避免重整時被外部 CDN runtime 阻塞首屏） -->
+<link rel="stylesheet" href="tailwind.css" />
 
 <!-- 字體：介面 Inter / 標題 Space Grotesk / 版本號 & log JetBrains Mono -->
 <link rel="preconnect" href="https://fonts.googleapis.com" />

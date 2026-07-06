@@ -790,12 +790,6 @@
     setGroup(localStorage.getItem("cockpit-group") || "flat");
     setLayout(localStorage.getItem("cockpit-panel-layout") || "side");
     emptyCurrentJob();
-    // 顯示 server 版本（best-effort）
-    try {
-      const vr = await api("/api/version");
-      const el = $("#server-ver");
-      if (el && vr && vr.version) el.textContent = vr.version;
-    } catch (_) {}
     try {
       await loadInstalls();
       await loadSystems();
@@ -813,5 +807,10 @@
     }
     render();
     renderRecentJobs();
+    // 顯示 server 版本（best-effort）：不得阻塞首屏主要資料載入。
+    api("/api/version").then((vr) => {
+      const el = $("#server-ver");
+      if (el && vr && vr.version) el.textContent = vr.version;
+    }).catch(() => {});
   })();
 })();
