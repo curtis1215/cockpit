@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -44,9 +43,16 @@ func buildFakeTarGz(t *testing.T, content string) []byte {
 
 // setupFakeServer starts a test HTTP server that returns a fake GitHub
 // releases/latest response pointing the asset URL back at the same server.
+// Asset 格式跟隨 goreleaser 行為：windows 出 zip（內含 cockpit.exe），
+// 其餘平台 tar.gz（內含 cockpit）。
 func setupFakeServer(t *testing.T, tag, assetContent string) *httptest.Server {
 	t.Helper()
-	assetBytes := buildFakeTarGz(t, assetContent)
+	var assetBytes []byte
+	if runtime.GOOS == "windows" {
+		assetBytes = buildFakeZip(t, assetContent)
+	} else {
+		assetBytes = buildFakeTarGz(t, assetContent)
+	}
 
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -57,7 +63,7 @@ func setupFakeServer(t *testing.T, tag, assetContent string) *httptest.Server {
 			if len(tagVer) > 0 && tagVer[0] == 'v' {
 				tagVer = tagVer[1:]
 			}
-			assetName := fmt.Sprintf("cockpit_%s_%s_%s.tar.gz", tagVer, runtime.GOOS, runtime.GOARCH)
+			assetName := selfupdate.AssetName(runtime.GOOS, runtime.GOARCH, tagVer)
 			assetURL := srv.URL + "/assets/" + assetName
 			payload := map[string]interface{}{
 				"tag_name": tag,
@@ -175,7 +181,7 @@ func TestLatest(t *testing.T) {
 	if tag != "v9.9.9" {
 		t.Errorf("tag = %q, want v9.9.9", tag)
 	}
-	want := fmt.Sprintf("cockpit_9.9.9_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	want := selfupdate.AssetName(runtime.GOOS, runtime.GOARCH, "9.9.9")
 	if _, ok := assets[want]; !ok {
 		t.Errorf("expected asset %q in map %v", want, assets)
 	}
