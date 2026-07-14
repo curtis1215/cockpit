@@ -12,9 +12,10 @@ import (
 
 // settings keys（與 internal/translate.Config 對應）
 const (
-	setTranslateEndpoint  = "translate.endpoint"
-	setTranslateModel     = "translate.model"
-	setTranslateMaxTokens = "translate.max_tokens"
+	setTranslateEndpoint   = "translate.endpoint"
+	setTranslateModel      = "translate.model"
+	setTranslateMaxTokens  = "translate.max_tokens"
+	setTranslateTimeoutSec = "translate.timeout_sec"
 )
 
 // proxyClient 給 models 代理用：短 timeout、共用連線。
@@ -25,13 +26,30 @@ func (s *Server) registerTranslateAPI() {
 	s.mux.HandleFunc("/api/translate/models", s.handleTranslateModels)
 }
 
+// clampTimeout 將 timeout_sec clamp 到 [30, 900]；<=0 視為預設 300。
+func clampTimeout(sec int) int {
+	if sec <= 0 {
+		return 300
+	}
+	if sec < 30 {
+		return 30
+	}
+	if sec > 900 {
+		return 900
+	}
+	return sec
+}
+
 // TranslateConfig 讀取目前儲存的翻譯端點設定（供 serve.go 注入 translate.NewDynamic）。
+// TimeoutSec 未設定或 0 時回傳 effective 300。
 func (s *Server) TranslateConfig() translate.Config {
 	maxTokens, _ := strconv.Atoi(s.st.GetSetting(setTranslateMaxTokens))
+	timeoutSec, _ := strconv.Atoi(s.st.GetSetting(setTranslateTimeoutSec))
 	return translate.Config{
-		Endpoint:  s.st.GetSetting(setTranslateEndpoint),
-		Model:     s.st.GetSetting(setTranslateModel),
-		MaxTokens: maxTokens,
+		Endpoint:   s.st.GetSetting(setTranslateEndpoint),
+		Model:      s.st.GetSetting(setTranslateModel),
+		MaxTokens:  maxTokens,
+		TimeoutSec: clampTimeout(timeoutSec),
 	}
 }
 
@@ -63,10 +81,12 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 		// 走 fallback，不會用空 model 打壞請求。
 		// 單一 transaction 寫入：避免中途失敗留下半套設定（endpoint 有、model 沒有），
 		// NewDynamic 每次翻譯都即時讀，半套設定會直接打出錯誤請求。
+		timeoutSec := clampTimeout(body.TimeoutSec)
 		if err := s.st.SetSettings(map[string]string{
-			setTranslateEndpoint:  body.Endpoint,
-			setTranslateModel:     body.Model,
-			setTranslateMaxTokens: strconv.Itoa(body.MaxTokens),
+			setTranslateEndpoint:   body.Endpoint,
+			setTranslateModel:      body.Model,
+			setTranslateMaxTokens:  strconv.Itoa(body.MaxTokens),
+			setTranslateTimeoutSec: strconv.Itoa(timeoutSec),
 		}); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return

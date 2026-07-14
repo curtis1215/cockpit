@@ -60,9 +60,19 @@ func nilIfEmpty(s string) any {
 }
 
 func (s *Server) handleChangelog(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/changelog/"), "/")
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/changelog/"), "/"), "/")
+	// GET /api/changelog/{sw}/{ver}
+	// POST /api/changelog/{sw}/{ver}/retry
+	if len(parts) == 3 && parts[2] == "retry" && r.Method == http.MethodPost {
+		s.handleChangelogRetry(w, parts[0], parts[1])
+		return
+	}
 	if len(parts) != 2 {
 		writeJSON(w, 404, map[string]string{"error": "not found"})
+		return
+	}
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
 	v, err := s.st.GetVersion(parts[0], parts[1])
@@ -70,8 +80,54 @@ func (s *Server) handleChangelog(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 404, map[string]string{"error": "version not found"})
 		return
 	}
-	writeJSON(w, 200, map[string]any{"software": parts[0], "version": parts[1],
-		"changelog_zh": v.ChangelogZh, "changelog_raw": v.ChangelogRaw, "released_at": v.ReleasedAt})
+	writeJSON(w, 200, map[string]any{
+		"software": parts[0], "version": parts[1],
+		"changelog_zh": v.ChangelogZh, "changelog_raw": v.ChangelogRaw, "released_at": v.ReleasedAt,
+		"translate_status": v.TranslateStatus, "translate_error": v.TranslateError,
+		"translate_updated_at": v.TranslateUpdatedAt,
+	})
+}
+
+func (s *Server) handleChangelogRetry(w http.ResponseWriter, software, ver string) {
+	v, err := s.st.GetVersion(software, ver)
+	if err != nil {
+		writeJSON(w, 404, map[string]string{"error": "version not found"})
+		return
+	}
+	if strings.TrimSpace(v.ChangelogRaw) == "" {
+		writeJSON(w, 400, map[string]string{"error": "no changelog raw"})
+		return
+	}
+	key := software + "@" + ver
+	if !s.tryAcquireTranslate(key) {
+		writeJSON(w, 409, map[string]string{"error": "translation already in progress"})
+		return
+	}
+	if err := s.st.SetTranslateStatus(software, ver, "translating", ""); err != nil {
+		s.releaseTranslate(key)
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	raw := v.ChangelogRaw
+	fn := s.TranslateFn
+	go func() {
+		defer s.releaseTranslate(key)
+		if fn == nil {
+			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", "translate not configured")
+			return
+		}
+		out, err := fn(raw)
+		if err != nil {
+			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", err.Error())
+			return
+		}
+		if strings.TrimSpace(out) == "" {
+			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", "empty translation")
+			return
+		}
+		_ = s.st.UpdateTranslateResult(software, ver, out, "ready", "")
+	}()
+	writeJSON(w, 200, map[string]any{"ok": true, "translate_status": "translating"})
 }
 
 func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
