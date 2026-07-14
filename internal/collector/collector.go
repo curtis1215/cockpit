@@ -2,6 +2,7 @@ package collector
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/curtis1215/cockpit/internal/inventory"
@@ -11,7 +12,7 @@ import (
 )
 
 type FetchFunc func(inventory.Software) (sources.SourceResult, error)
-type TranslateFunc func(raw string) string
+type TranslateFunc func(raw string) (string, error)
 type Report struct {
 	Software       string `json:"software"`
 	CurrentVersion string `json:"current_version"`
@@ -28,19 +29,31 @@ func RefreshUpstream(s *store.Store, inv inventory.Inventory, fetch FetchFunc, t
 			s.AddEvent("error", sw.Name, "", "fetch failed: "+err.Error())
 			continue
 		}
-		zh := ""
-		if existing, e := s.GetVersion(sw.Name, latest.Version); e == nil {
-			zh = existing.ChangelogZh
+		existing, _ := s.GetVersion(sw.Name, latest.Version)
+		zh := existing.ChangelogZh
+		if zh != "" {
+			s.AddVersion(sw.Name, latest.Version, "", latest.ChangelogRaw, zh)
+			s.SetTranslateStatus(sw.Name, latest.Version, "ready", "")
+			continue
 		}
-		if zh == "" && latest.ChangelogRaw != "" {
-			zh = translate(latest.ChangelogRaw)
-			if zh == "" {
-				// 翻譯靜默失敗（codex/claude 逾時或暫時性錯誤）：留下 error event，
-				// 否則此版本會無中文且無從察覺。下次 refresh 仍會重試翻譯。
-				s.AddEvent("error", sw.Name, "", fmt.Sprintf("translate failed (raw %d bytes)", len(latest.ChangelogRaw)))
+		s.AddVersion(sw.Name, latest.Version, "", latest.ChangelogRaw, "")
+		if strings.TrimSpace(latest.ChangelogRaw) == "" {
+			s.SetTranslateStatus(sw.Name, latest.Version, "none", "")
+			continue
+		}
+		s.SetTranslateStatus(sw.Name, latest.Version, "translating", "")
+		out, terr := translate(latest.ChangelogRaw)
+		if terr != nil || strings.TrimSpace(out) == "" {
+			msg := "empty translation"
+			if terr != nil {
+				msg = terr.Error()
 			}
+			// 只改 status，不動 zh——避免與並行 retry 競態時清掉剛寫好的中文。
+			s.SetTranslateStatus(sw.Name, latest.Version, "failed", msg)
+			s.AddEvent("error", sw.Name, "", fmt.Sprintf("translate failed (raw %d bytes): %s", len(latest.ChangelogRaw), msg))
+			continue
 		}
-		s.AddVersion(sw.Name, latest.Version, "", latest.ChangelogRaw, zh)
+		s.UpdateTranslateResult(sw.Name, latest.Version, out, "ready", "")
 	}
 }
 

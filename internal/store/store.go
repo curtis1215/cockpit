@@ -74,6 +74,19 @@ func Open(path string) (*Store, error) {
 			return nil, err
 		}
 	}
+	// Defensive migration: translate_* columns on versions (pre-existing DBs).
+	for _, q := range []string{
+		`ALTER TABLE versions ADD COLUMN translate_status TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE versions ADD COLUMN translate_error TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE versions ADD COLUMN translate_updated_at TEXT NOT NULL DEFAULT ''`,
+	} {
+		if _, err := db.Exec(q); err != nil && !contains(err.Error(), "duplicate column name") {
+			return nil, err
+		}
+	}
+	if err := (&Store{db: db}).BackfillTranslateStatus(); err != nil {
+		return nil, err
+	}
 	return &Store{db: db}, nil
 }
 
@@ -389,6 +402,7 @@ func (s *Store) LabelExists(label string) bool {
 
 type Version struct {
 	Software, VersionStr, ReleasedAt, ChangelogRaw, ChangelogZh string
+	TranslateStatus, TranslateError, TranslateUpdatedAt         string
 }
 type Install struct {
 	Software, Machine, CurrentVersion, Status, LastChecked string
@@ -410,36 +424,93 @@ func nullStr(s string) any {
 }
 
 func (s *Store) AddVersion(software, ver, released, raw, zh string) error {
+	// Derive translate_status: non-empty zh → ready; otherwise leave as default 'none'
+	// (collector will SetTranslateStatus when it starts translating raw-without-zh rows).
+	status := "none"
+	if zh != "" {
+		status = "ready"
+	}
 	_, err := s.db.Exec(
-		`INSERT INTO versions (software,version,released_at,changelog_raw,changelog_zh) VALUES (?,?,?,?,?)
+		`INSERT INTO versions (software,version,released_at,changelog_raw,changelog_zh,translate_status) VALUES (?,?,?,?,?,?)
 		 ON CONFLICT(software,version) DO UPDATE SET released_at=excluded.released_at,
 		   changelog_raw=excluded.changelog_raw,
-		   changelog_zh=COALESCE(excluded.changelog_zh, versions.changelog_zh)`,
-		software, ver, nullStr(released), raw, nullStr(zh))
+		   changelog_zh=COALESCE(excluded.changelog_zh, versions.changelog_zh),
+		   translate_status=CASE
+		     WHEN excluded.changelog_zh IS NOT NULL AND excluded.changelog_zh != '' THEN 'ready'
+		     ELSE versions.translate_status
+		   END`,
+		software, ver, nullStr(released), raw, nullStr(zh), status)
 	return err
+}
+
+// UpdateTranslateResult overwrites changelog_zh and translate status/error (does NOT use COALESCE).
+func (s *Store) UpdateTranslateResult(software, ver, zh, status, errMsg string) error {
+	_, err := s.db.Exec(
+		`UPDATE versions SET changelog_zh=?, translate_status=?, translate_error=?,
+		 translate_updated_at=datetime('now') WHERE software=? AND version=?`,
+		nullStr(zh), status, errMsg, software, ver)
+	return err
+}
+
+// SetTranslateStatus updates only translate status/error/updated_at (leaves changelog_zh alone).
+func (s *Store) SetTranslateStatus(software, ver, status, errMsg string) error {
+	_, err := s.db.Exec(
+		`UPDATE versions SET translate_status=?, translate_error=?,
+		 translate_updated_at=datetime('now') WHERE software=? AND version=?`,
+		status, errMsg, software, ver)
+	return err
+}
+
+// BackfillTranslateStatus fills empty translate_status on legacy rows (called from Open).
+// Also recovers stale translating rows left by process restart (in-memory work is gone).
+func (s *Store) BackfillTranslateStatus() error {
+	if _, err := s.db.Exec(`UPDATE versions SET translate_status='ready', translate_error=''
+		WHERE COALESCE(changelog_zh,'') != '' AND COALESCE(translate_status,'') = ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE versions SET translate_status='failed', translate_error='needs retranslate'
+		WHERE COALESCE(changelog_raw,'') != '' AND COALESCE(changelog_zh,'') = '' AND COALESCE(translate_status,'') = ''`); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`UPDATE versions SET translate_status='none'
+		WHERE COALESCE(changelog_raw,'') = '' AND COALESCE(changelog_zh,'') = '' AND COALESCE(translate_status,'') = ''`); err != nil {
+		return err
+	}
+	// Process restart clears in-memory translate work; any DB 'translating' is stale.
+	if _, err := s.db.Exec(`UPDATE versions SET translate_status='failed', translate_error='interrupted',
+		translate_updated_at=datetime('now') WHERE translate_status='translating'`); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Store) GetVersion(software, ver string) (Version, error) {
 	var v Version
-	var rel, raw, zh sql.NullString
-	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh FROM versions WHERE software=? AND version=?`, software, ver).
-		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh)
+	var rel, raw, zh, ts, te, tu sql.NullString
+	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh,
+		translate_status,translate_error,translate_updated_at
+		FROM versions WHERE software=? AND version=?`, software, ver).
+		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh, &ts, &te, &tu)
 	if err == sql.ErrNoRows {
 		return Version{}, ErrNotFound
 	}
 	v.ReleasedAt, v.ChangelogRaw, v.ChangelogZh = rel.String, raw.String, zh.String
+	v.TranslateStatus, v.TranslateError, v.TranslateUpdatedAt = ts.String, te.String, tu.String
 	return v, err
 }
 
 func (s *Store) LatestVersion(software string) (Version, error) {
 	var v Version
-	var rel, raw, zh sql.NullString
-	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh FROM versions WHERE software=? ORDER BY rowid DESC LIMIT 1`, software).
-		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh)
+	var rel, raw, zh, ts, te, tu sql.NullString
+	err := s.db.QueryRow(`SELECT software,version,released_at,changelog_raw,changelog_zh,
+		translate_status,translate_error,translate_updated_at
+		FROM versions WHERE software=? ORDER BY rowid DESC LIMIT 1`, software).
+		Scan(&v.Software, &v.VersionStr, &rel, &raw, &zh, &ts, &te, &tu)
 	if err == sql.ErrNoRows {
 		return Version{}, ErrNotFound
 	}
 	v.ReleasedAt, v.ChangelogRaw, v.ChangelogZh = rel.String, raw.String, zh.String
+	v.TranslateStatus, v.TranslateError, v.TranslateUpdatedAt = ts.String, te.String, tu.String
 	return v, err
 }
 

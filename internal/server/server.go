@@ -36,6 +36,12 @@ type Server struct {
 	// running job 以 boot 為基準起算。
 	boot    time.Time
 	jobSeen sync.Map // map[int64]time.Time
+
+	// TranslateFn 為可注入的 changelog 翻譯函式（serve 接線 tr.ChangelogResult；測試可塞 fake）。
+	// translateInflight 為 process 內單飛：key = software@version。
+	TranslateFn       func(raw string) (string, error)
+	translateMu       sync.Mutex
+	translateInflight map[string]struct{}
 }
 
 func New(st *store.Store, enrollSecret string) *Server {
@@ -43,7 +49,10 @@ func New(st *store.Store, enrollSecret string) *Server {
 }
 
 func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Inventory) *Server {
-	s := &Server{st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux(), boot: time.Now()}
+	s := &Server{
+		st: st, enrollSecret: enrollSecret, inv: inv, mux: http.NewServeMux(), boot: time.Now(),
+		translateInflight: make(map[string]struct{}),
+	}
 	s.latestFn = defaultLatestFn()
 	s.upgradeFn = func() (bool, error) {
 		return defaultUpgrade(s.version)
@@ -52,6 +61,23 @@ func NewWithInventory(st *store.Store, enrollSecret string, inv inventory.Invent
 	s.writableCheckFn = defaultWritableCheck
 	s.routes()
 	return s
+}
+
+// tryAcquireTranslate 嘗試取得 software@version 的翻譯鎖；false 表示已在進行中。
+func (s *Server) tryAcquireTranslate(key string) bool {
+	s.translateMu.Lock()
+	defer s.translateMu.Unlock()
+	if _, ok := s.translateInflight[key]; ok {
+		return false
+	}
+	s.translateInflight[key] = struct{}{}
+	return true
+}
+
+func (s *Server) releaseTranslate(key string) {
+	s.translateMu.Lock()
+	defer s.translateMu.Unlock()
+	delete(s.translateInflight, key)
 }
 
 // SetVersion stores the server binary version string, exposed via /api/version.

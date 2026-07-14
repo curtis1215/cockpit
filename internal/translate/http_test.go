@@ -7,6 +7,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeLM 模擬 LM Studio 的 OpenAI 相容端點，回傳指定 content 並記錄收到的請求。
@@ -165,5 +166,38 @@ func TestDynamicHotSwitch(t *testing.T) {
 	cfg = Config{Endpoint: srv.URL, Model: "m"} // 模擬 WebUI 改設定後即時生效
 	if out := tr.Changelog("raw2"); out != "via-http" {
 		t.Fatalf("after switch: %q", out)
+	}
+}
+
+func TestHTTPTimeoutFromConfig(t *testing.T) {
+	// server sleep 2s；TimeoutSec=1 → ChangelogResult 必須 error
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(2 * time.Second)
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "late"}, "finish_reason": "stop"},
+			},
+		})
+	}))
+	defer srv.Close()
+	cfg := Config{Endpoint: srv.URL, Model: "m", TimeoutSec: 1}
+	tr := NewDynamic(func() Config { return cfg }, "")
+	_, err := tr.ChangelogResult("raw")
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+}
+
+func TestChangelogResultEmptyContentError(t *testing.T) {
+	// content "" → error 含 empty
+	srv := fakeLM(t, "", nil)
+	defer srv.Close()
+	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: "m"} }, "")
+	_, err := tr.ChangelogResult("raw")
+	if err == nil {
+		t.Fatal("expected empty content error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "empty") {
+		t.Fatalf("error should contain empty: %v", err)
 	}
 }

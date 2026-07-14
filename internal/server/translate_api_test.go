@@ -110,6 +110,91 @@ func TestTranslateConfigMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestTranslateConfigTimeoutSec(t *testing.T) {
+	srv, st := trServer(t)
+
+	// PUT timeout_sec=10 → stored "10"；GET 回 10
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"http://h:1","model":"m","max_tokens":0,"timeout_sec":10}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put 10: code %d %s", rec.Code, rec.Body)
+	}
+	// clamp: 10 < 30 → 30
+	if v := st.GetSetting("translate.timeout_sec"); v != "30" {
+		t.Fatalf("stored timeout_sec want 30 got %q", v)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/config", nil))
+	var got struct {
+		TimeoutSec int `json:"timeout_sec"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TimeoutSec != 30 {
+		t.Fatalf("GET after put 10: TimeoutSec=%d want 30", got.TimeoutSec)
+	}
+
+	// PUT timeout_sec=5 → clamp 成 30
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"http://h:1","model":"m","max_tokens":0,"timeout_sec":5}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put 5: code %d", rec.Code)
+	}
+	if v := st.GetSetting("translate.timeout_sec"); v != "30" {
+		t.Fatalf("clamp 5→30 stored %q", v)
+	}
+
+	// PUT timeout_sec=0 → effective 300
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"http://h:1","model":"m","max_tokens":0,"timeout_sec":0}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put 0: code %d", rec.Code)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/config", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TimeoutSec != 300 {
+		t.Fatalf("PUT 0 → GET TimeoutSec=%d want 300", got.TimeoutSec)
+	}
+
+	// PUT timeout_sec=900 ok；PUT 999 → clamp 900
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"http://h:1","model":"m","max_tokens":0,"timeout_sec":900}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put 900: code %d", rec.Code)
+	}
+	if v := st.GetSetting("translate.timeout_sec"); v != "900" {
+		t.Fatalf("stored 900 got %q", v)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"http://h:1","model":"m","max_tokens":0,"timeout_sec":999}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put 999: code %d", rec.Code)
+	}
+	if v := st.GetSetting("translate.timeout_sec"); v != "900" {
+		t.Fatalf("clamp 999→900 stored %q", v)
+	}
+
+	// default GET (fresh) TimeoutSec == 300
+	srv2, _ := trServer(t)
+	rec = httptest.NewRecorder()
+	srv2.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/config", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.TimeoutSec != 300 {
+		t.Fatalf("default TimeoutSec=%d want 300", got.TimeoutSec)
+	}
+}
+
 // 只對「已儲存的端點」拉模型——不接受任意 query endpoint（SSRF 防護）。
 func TestTranslateModelsUsesSavedEndpoint(t *testing.T) {
 	lm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

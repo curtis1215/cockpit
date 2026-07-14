@@ -21,9 +21,7 @@ func fetchPypi(sw inventory.Software, locator string, hc *http.Client, base stri
 		return SourceResult{}, err
 	}
 	res := SourceResult{Version: out.Info.Version}
-	if strings.HasPrefix(sw.Changelog, "github:") {
-		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
-	}
+	res.ChangelogRaw = fillChangelog(sw, res.Version, hc)
 	return res, nil
 }
 
@@ -37,9 +35,7 @@ func fetchBrew(sw inventory.Software, locator string, hc *http.Client, base stri
 		return SourceResult{}, err
 	}
 	res := SourceResult{Version: out.Versions.Stable}
-	if strings.HasPrefix(sw.Changelog, "github:") {
-		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
-	}
+	res.ChangelogRaw = fillChangelog(sw, res.Version, hc)
 	return res, nil
 }
 
@@ -57,8 +53,6 @@ func fetchCustom(sw inventory.Software, locator string, hc *http.Client) (Source
 		v = out
 	}
 	res := SourceResult{Version: v}
-	if strings.HasPrefix(sw.Changelog, "github:") {
-		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
-	}
+	res.ChangelogRaw = fillChangelog(sw, res.Version, hc)
 	return res, nil
 }

@@ -30,3 +30,11 @@ software:
             2. 重新 build 鏡像
             3. 重新部署容器
             完成後回報新版本號與部署結果。
+
+  - name: grok
+    kind: native
+    latest_source: "custom:curl -fsSL https://x.ai/cli/stable"
+    changelog: "url:https://x.ai/cli/changelogs/{version}.external.md"
+    installs:
+      - machine: mac
+        current_cmd: "grok --version"

@@ -18,7 +18,11 @@ CREATE TABLE IF NOT EXISTS systems (
 );
 CREATE TABLE IF NOT EXISTS versions (
   software TEXT NOT NULL, version TEXT NOT NULL, released_at TEXT,
-  changelog_raw TEXT, changelog_zh TEXT, fetched_at TEXT DEFAULT (datetime('now')),
+  changelog_raw TEXT, changelog_zh TEXT,
+  translate_status TEXT NOT NULL DEFAULT 'none',
+  translate_error TEXT NOT NULL DEFAULT '',
+  translate_updated_at TEXT NOT NULL DEFAULT '',
+  fetched_at TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (software, version)
 );
 CREATE TABLE IF NOT EXISTS installs (

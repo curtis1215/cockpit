@@ -20,6 +20,26 @@ func TestTranslate(t *testing.T) {
 	}
 }
 
+func TestChangelogResult(t *testing.T) {
+	tr := &Translator{Run: func(prompt string) (string, error) { return "  中文摘要\n", nil }}
+	out, err := tr.ChangelogResult("## 1.0\n- fix")
+	if err != nil || out != "中文摘要" {
+		t.Fatalf("got %q err=%v", out, err)
+	}
+	out, err = tr.ChangelogResult("")
+	if err != nil || out != "" {
+		t.Fatalf("empty raw: %q err=%v", out, err)
+	}
+	boom := &Translator{Run: func(string) (string, error) { return "", errFake }}
+	if _, err := boom.ChangelogResult("notes"); err == nil {
+		t.Fatal("error should propagate")
+	}
+	empty := &Translator{Run: func(string) (string, error) { return "  \n", nil }}
+	if _, err := empty.ChangelogResult("notes"); err == nil || !strings.Contains(strings.ToLower(err.Error()), "empty") {
+		t.Fatalf("empty content: %v", err)
+	}
+}
+
 var errFake = errBoom{}
 
 type errBoom struct{}

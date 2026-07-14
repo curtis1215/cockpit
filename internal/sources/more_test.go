@@ -2,7 +2,9 @@ package sources
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/curtis1215/cockpit/internal/inventory"
@@ -78,5 +80,31 @@ func TestCustomChangelog(t *testing.T) {
 	}
 	if res.ChangelogRaw == "" {
 		t.Fatal("custom with github changelog should fill ChangelogRaw")
+	}
+}
+
+func TestURLChangelogTemplate(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires bash")
+	}
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Write([]byte("# 0.2.101\n- feature"))
+	}))
+	defer srv.Close()
+	sw := inventory.Software{
+		Name: "grok", LatestSource: "custom:echo 0.2.101",
+		Changelog: "url:" + srv.URL + "/changelogs/{version}.external.md",
+	}
+	res, err := fetchCustom(sw, "echo 0.2.101", srv.Client())
+	if err != nil || res.Version != "0.2.101" {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if res.ChangelogRaw == "" || !strings.Contains(res.ChangelogRaw, "feature") {
+		t.Fatalf("raw=%q path=%q", res.ChangelogRaw, gotPath)
+	}
+	if !strings.Contains(gotPath, "0.2.101") {
+		t.Fatalf("path %q missing version", gotPath)
 	}
 }
