@@ -2,7 +2,9 @@ package collector
 
 import (
 	"database/sql"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
@@ -26,10 +28,96 @@ func TestRefreshUpstream(t *testing.T) {
 	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
 		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## notes"}, nil
 	}
-	tr := func(raw string) string { return "中文摘要" }
+	tr := func(raw string) (string, error) { return "中文摘要", nil }
 	RefreshUpstream(s, iv(), fetch, tr)
 	if v, _ := s.GetVersion("cc", "2.1.101"); v.ChangelogZh != "中文摘要" {
 		t.Fatalf("version: %+v", v)
+	}
+}
+
+func TestRefreshUpstream_SetsReadyStatus(t *testing.T) {
+	s, _ := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	defer s.Close()
+	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
+		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## notes"}, nil
+	}
+	tr := func(raw string) (string, error) { return "中文", nil }
+	RefreshUpstream(s, iv(), fetch, tr)
+	v, err := s.GetVersion("cc", "2.1.101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.TranslateStatus != "ready" {
+		t.Fatalf("TranslateStatus=%q want ready", v.TranslateStatus)
+	}
+	if v.ChangelogZh != "中文" {
+		t.Fatalf("ChangelogZh=%q", v.ChangelogZh)
+	}
+	if v.TranslateError != "" {
+		t.Fatalf("TranslateError=%q want empty", v.TranslateError)
+	}
+}
+
+func TestRefreshUpstream_SetsFailedStatus(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "c.db")
+	s, _ := store.Open(dbPath)
+	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
+		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## notes"}, nil
+	}
+	tr := func(raw string) (string, error) { return "", errors.New("timeout after 300s") }
+	RefreshUpstream(s, iv(), fetch, tr)
+
+	v, err := s.GetVersion("cc", "2.1.101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.TranslateStatus != "failed" {
+		t.Fatalf("TranslateStatus=%q want failed", v.TranslateStatus)
+	}
+	if !strings.Contains(v.TranslateError, "timeout") {
+		t.Fatalf("TranslateError=%q want timeout", v.TranslateError)
+	}
+	s.Close()
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var detail string
+	if err := db.QueryRow(
+		"SELECT detail FROM events WHERE type='error' AND software='cc' AND detail LIKE 'translate failed%'",
+	).Scan(&detail); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, "timeout") {
+		t.Fatalf("error event detail=%q want timeout", detail)
+	}
+}
+
+func TestRefreshUpstream_SkipsWhenZhExists(t *testing.T) {
+	s, _ := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	defer s.Close()
+	if err := s.AddVersion("cc", "2.1.101", "", "old raw", "既有中文"); err != nil {
+		t.Fatal(err)
+	}
+	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
+		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## new notes"}, nil
+	}
+	tr := func(raw string) (string, error) {
+		t.Fatal("translate should not be called when zh exists")
+		return "", nil
+	}
+	RefreshUpstream(s, iv(), fetch, tr)
+	v, err := s.GetVersion("cc", "2.1.101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ChangelogZh != "既有中文" {
+		t.Fatalf("ChangelogZh=%q", v.ChangelogZh)
+	}
+	if v.TranslateStatus != "ready" {
+		t.Fatalf("TranslateStatus=%q want ready", v.TranslateStatus)
 	}
 }
 
@@ -55,7 +143,7 @@ func TestRefreshUpstream_TranslateFailureLogsErrorEvent(t *testing.T) {
 	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
 		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## real notes"}, nil
 	}
-	trFail := func(raw string) string { return "" } // 模擬 codex/claude 翻譯失敗回空
+	trFail := func(raw string) (string, error) { return "", nil } // 模擬空翻譯
 	RefreshUpstream(s, iv(), fetch, trFail)
 	s.Close() // 關閉後再以獨立連線查 events，避免 sqlite 鎖
 
@@ -82,7 +170,7 @@ func TestRefreshUpstream_TranslateSuccessNoErrorEvent(t *testing.T) {
 	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
 		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## real notes"}, nil
 	}
-	tr := func(raw string) string { return "中文摘要" }
+	tr := func(raw string) (string, error) { return "中文摘要", nil }
 	RefreshUpstream(s, iv(), fetch, tr)
 	s.Close()
 
