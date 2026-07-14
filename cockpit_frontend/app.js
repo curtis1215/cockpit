@@ -350,6 +350,7 @@
       if (modalKey !== key) return;
       try {
         const nv = await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}`);
+        if (modalKey !== key) return;
         const nst = renderChangelogBody(nv);
         if (nst !== "pending" && nst !== "translating") stopModalPoll();
       } catch (_) { /* 輪詢失敗暫忽略，下次再試 */ }
@@ -415,6 +416,8 @@
 
   async function retryTranslate(sw, ver) {
     const key = `${sw}@${ver}`;
+    const btn = $("#modal-retry");
+    if (btn) btn.disabled = true;
     try {
       await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}/retry`, { method: "POST" });
       if (modalKey !== key) return;
@@ -426,6 +429,7 @@
       });
       startModalPoll(key, sw, ver);
     } catch (e) {
+      if (btn) btn.disabled = false;
       const msg = e.status === 409 ? "翻譯進行中，請稍候"
         : e.status === 404 ? "找不到此版本"
         : e.status === 400 ? "尚無原文可翻譯"
