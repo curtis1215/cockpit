@@ -48,7 +48,8 @@ func RefreshUpstream(s *store.Store, inv inventory.Inventory, fetch FetchFunc, t
 			if terr != nil {
 				msg = terr.Error()
 			}
-			s.UpdateTranslateResult(sw.Name, latest.Version, "", "failed", msg)
+			// 只改 status，不動 zh——避免與並行 retry 競態時清掉剛寫好的中文。
+			s.SetTranslateStatus(sw.Name, latest.Version, "failed", msg)
 			s.AddEvent("error", sw.Name, "", fmt.Sprintf("translate failed (raw %d bytes): %s", len(latest.ChangelogRaw), msg))
 			continue
 		}

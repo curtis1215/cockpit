@@ -163,6 +163,36 @@ func TestRefreshUpstream_TranslateFailureLogsErrorEvent(t *testing.T) {
 	}
 }
 
+// refresh 翻譯失敗不可清掉既有 zh（與 retry 並行時 race 保護）。
+func TestRefreshUpstream_TranslateFailureKeepsExistingZh(t *testing.T) {
+	s, _ := store.Open(filepath.Join(t.TempDir(), "c.db"))
+	defer s.Close()
+	// 模擬：refresh 開始時尚無 zh（會進翻譯路徑），翻譯期間 retry 已寫入 zh。
+	fetch := func(sw inventory.Software) (sources.SourceResult, error) {
+		return sources.SourceResult{Version: "2.1.101", ChangelogRaw: "## notes"}, nil
+	}
+	tr := func(raw string) (string, error) {
+		if err := s.UpdateTranslateResult("cc", "2.1.101", "重試已寫入", "ready", ""); err != nil {
+			t.Fatal(err)
+		}
+		return "", errors.New("timeout after 300s")
+	}
+	RefreshUpstream(s, iv(), fetch, tr)
+	v, err := s.GetVersion("cc", "2.1.101")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.ChangelogZh != "重試已寫入" {
+		t.Fatalf("ChangelogZh=%q want kept", v.ChangelogZh)
+	}
+	if v.TranslateStatus != "failed" {
+		t.Fatalf("TranslateStatus=%q want failed", v.TranslateStatus)
+	}
+	if !strings.Contains(v.TranslateError, "timeout") {
+		t.Fatalf("TranslateError=%q", v.TranslateError)
+	}
+}
+
 // 翻譯成功時不可誤記 error event。
 func TestRefreshUpstream_TranslateSuccessNoErrorEvent(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "c.db")
