@@ -81,6 +81,46 @@ func ghHeaders() map[string]string {
 	return nil
 }
 
+func httpGetBody(hc *http.Client, url string) string {
+	if hc == nil {
+		hc = &http.Client{Timeout: 20 * time.Second}
+	}
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return ""
+	}
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// fillChangelog resolves sw.Changelog after version is known.
+// github:… → GitHub release body; url:… with {version}/{ver} → GET body.
+func fillChangelog(sw inventory.Software, version string, hc *http.Client) string {
+	cl := strings.TrimSpace(sw.Changelog)
+	switch {
+	case strings.HasPrefix(cl, "github:"):
+		return githubReleaseBody(strings.TrimPrefix(cl, "github:"), version, hc, githubBase)
+	case strings.HasPrefix(cl, "url:"):
+		u := strings.TrimPrefix(cl, "url:")
+		u = strings.ReplaceAll(u, "{version}", version)
+		u = strings.ReplaceAll(u, "{ver}", version)
+		return httpGetBody(hc, u)
+	default:
+		return ""
+	}
+}
+
 func fetchNpm(sw inventory.Software, locator string, hc *http.Client, base string) (SourceResult, error) {
 	var out struct {
 		DistTags struct {
@@ -91,9 +131,7 @@ func fetchNpm(sw inventory.Software, locator string, hc *http.Client, base strin
 		return SourceResult{}, err
 	}
 	res := SourceResult{Version: out.DistTags.Latest}
-	if strings.HasPrefix(sw.Changelog, "github:") {
-		res.ChangelogRaw = githubReleaseBody(strings.TrimPrefix(sw.Changelog, "github:"), res.Version, hc, githubBase)
-	}
+	res.ChangelogRaw = fillChangelog(sw, res.Version, hc)
 	return res, nil
 }
 
