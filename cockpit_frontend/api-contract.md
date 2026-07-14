@@ -56,6 +56,9 @@ def list_installs(req: Request, machine: str = "", status: str = "", q: str = ""
 | `released_at` | date | |
 | `changelog_zh` | markdown | 繁中重點摘要（前端以極簡 md 渲染：`**粗體**`、`` `code` ``、`- 條列`） |
 | `changelog_raw` | string | 原文 changelog（折疊區，純文字） |
+| `translate_status` | enum | `none` \| `pending` \| `translating` \| `ready` \| `failed`（列表不帶；僅 modal） |
+| `translate_error` | string | 失敗原因；`ready`/`none` 時為空 |
+| `translate_updated_at` | datetime | 狀態最後變更（UTC） |
 
 ### 1.3 `Job`（更新工作）
 | 欄位 | 型態 | 說明 |
@@ -93,7 +96,10 @@ def list_installs(req: Request, machine: str = "", status: str = "", q: str = ""
 | `GET` | `/api/machines` | 篩選下拉用機器清單 | `string[]` | `initFilters()`（現為 `MOCK.MACHINES`） |
 | `GET` | `/api/installs?machine=&status=&q=&only_updates=` | 主清單（建議**後端過濾**） | `Install[]` 或 partial | `render()` / `filtered()`（現為前端過濾） |
 | `POST` | `/api/check` | 觸發重新檢查所有來源（非同步） | `202` + `{job_run_id}` | `#check-btn` 的 `[API]` 處 |
-| `GET` | `/api/changelog/{software}/{version}` | 單一版本 changelog | `Version` | `openChangelog()` 的 `[API]` 處 |
+| `GET` | `/api/changelog/{software}/{version}` | 單一版本 changelog（含翻譯狀態） | `Version` | `openChangelog()`；`pending`/`translating` 時 modal 每 2.5s 輪詢 |
+| `POST` | `/api/changelog/{software}/{version}/retry` | 非同步重試翻譯 | `200` `{ok, translate_status:translating}`；`400` 無 raw；`404`；`409` 已在翻譯 | modal「重試翻譯」 |
+| `GET` | `/api/translate/config` | 翻譯端點設定 | `{endpoint, model, max_tokens, timeout_sec}` | manage 翻譯設定；`timeout_sec` 預設 300、clamp 30–900 |
+| `PUT` | `/api/translate/config` | 寫入翻譯設定（即時生效） | `{ok:true}` | manage 儲存 |
 | `GET` | `/api/jobs?limit=` | 最近工作清單 | `Job[]` | `renderRecentJobs()`（現為 `MOCK.JOBS`） |
 | `POST` | `/api/jobs` `{install_id}` | 建立更新工作 | `201` + `Job`（`status=queued/running`） | `startUpdate()` 的 `[API]` 處 |
 | `GET` | `/api/jobs/{id}` | 單一 job（含已累積 log） | `Job` | 點選最近工作時補抓 |

@@ -757,12 +757,13 @@
   }
 
   // ── 翻譯設定 ─────────────────────────────────────────────────────────────
-  const trEndpoint  = $("#tr-endpoint");
-  const trModel     = $("#tr-model");
-  const trMaxTokens = $("#tr-max-tokens");
-  const trModelList = $("#tr-model-list");
-  const trFetchBtn  = $("#tr-fetch-models");
-  const trSaveBtn   = $("#tr-save");
+  const trEndpoint   = $("#tr-endpoint");
+  const trModel      = $("#tr-model");
+  const trMaxTokens  = $("#tr-max-tokens");
+  const trTimeoutSec = $("#tr-timeout-sec");
+  const trModelList  = $("#tr-model-list");
+  const trFetchBtn   = $("#tr-fetch-models");
+  const trSaveBtn    = $("#tr-save");
 
   async function loadTranslateConfig() {
     try {
@@ -770,6 +771,7 @@
       trEndpoint.value = c.endpoint || "";
       trModel.value = c.model || "";
       if (c.max_tokens > 0) trMaxTokens.value = c.max_tokens;
+      if (c.timeout_sec > 0) trTimeoutSec.value = c.timeout_sec;
     } catch (e) {
       toast("err", "翻譯設定載入失敗：" + e.message);
     }
@@ -782,6 +784,7 @@
       endpoint: trEndpoint.value.trim(),
       model: trModel.value.trim(),
       max_tokens: parseInt(trMaxTokens.value, 10) || 0,
+      timeout_sec: Number(trTimeoutSec.value) || 300,
     };
   }
 

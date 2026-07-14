@@ -134,7 +134,7 @@
         <p style="font-size:12.5px;color:var(--text-3);margin:4px 0 0;">changelog 繁中翻譯使用的 OpenAI 相容端點（如 LM Studio）。未設定時沿用伺服器 translate_cmd。</p>
       </div>
       <div class="card" style="padding:16px;">
-        <div style="display:grid;grid-template-columns:minmax(260px,2fr) minmax(220px,2fr) minmax(110px,1fr);gap:12px;align-items:end;">
+        <div style="display:grid;grid-template-columns:minmax(220px,2fr) minmax(180px,1.5fr) minmax(100px,1fr) minmax(100px,1fr);gap:12px;align-items:end;">
           <div>
             <label for="tr-endpoint" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">端點 URL</label>
             <div style="display:flex;gap:8px;">
@@ -153,9 +153,13 @@
             <label for="tr-max-tokens" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Max tokens</label>
             <input id="tr-max-tokens" class="field mono" style="font-size:.75rem;" type="number" min="0" step="256" value="4096" />
           </div>
+          <div>
+            <label for="tr-timeout-sec" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Timeout（秒）</label>
+            <input id="tr-timeout-sec" class="field mono" style="font-size:.75rem;" type="number" min="30" max="900" step="30" value="300" />
+          </div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;">
-          <p style="font-size:12px;color:var(--text-3);margin:0;">⚠ Max tokens 建議 ≥ 4096——reasoning 模型會先消耗思考 token，設太小會導致翻譯輸出為空。</p>
+          <p style="font-size:12px;color:var(--text-3);margin:0;">⚠ Max tokens 建議 ≥ 4096；Timeout 預設 300（範圍 30–900），reasoning 模型建議 ≥ 180。</p>
           <button id="tr-save" class="btn btn-primary" style="flex:none;">儲存</button>
         </div>
       </div>

@@ -334,13 +334,60 @@
   }
 
   /* ============================================================
-     Changelog Modal
+     Changelog Modal — 翻譯狀態 / 輪詢 / 重試
      ============================================================ */
+  let modalPollTimer = null;
+  let modalKey = null;
+
+  function stopModalPoll() {
+    if (modalPollTimer) clearInterval(modalPollTimer);
+    modalPollTimer = null;
+  }
+
+  function startModalPoll(key, sw, ver) {
+    stopModalPoll();
+    modalPollTimer = setInterval(async () => {
+      if (modalKey !== key) return;
+      try {
+        const nv = await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}`);
+        const nst = renderChangelogBody(nv);
+        if (nst !== "pending" && nst !== "translating") stopModalPoll();
+      } catch (_) { /* 輪詢失敗暫忽略，下次再試 */ }
+    }, 2500);
+  }
+
+  function renderChangelogBody(v) {
+    const st = v.translate_status || (v.changelog_zh ? "ready" : (v.changelog_raw ? "failed" : "none"));
+    if (v.changelog_raw != null) $("#modal-raw").textContent = v.changelog_raw || "";
+    if (st === "ready" && v.changelog_zh) {
+      $("#modal-zh").innerHTML = mdToHtml(v.changelog_zh);
+      return st;
+    }
+    if (st === "pending" || st === "translating") {
+      $("#modal-zh").innerHTML = `<p style="color:var(--text-3);">翻譯中…完成後會自動更新</p>`;
+      return st;
+    }
+    if (st === "failed") {
+      const err = String(v.translate_error || "unknown").replace(/</g, "&lt;");
+      $("#modal-zh").innerHTML = `
+        <p style="color:var(--err);">翻譯失敗</p>
+        <p class="mono text-[12px]" style="color:var(--text-3);">${err}</p>
+        <button id="modal-retry" class="btn btn-primary btn-xs mt-2">重試翻譯</button>`;
+      $("#modal-retry")?.addEventListener("click", () => retryTranslate(v.software, v.version));
+      return st;
+    }
+    $("#modal-zh").innerHTML = `<p style="color:var(--text-3);">尚無 changelog 原文</p>`;
+    return st;
+  }
+
   async function openChangelog(key) {
     // key 格式：software@latest_version（由 changelogLink 產生）
     const atIdx = key.lastIndexOf("@");
     const sw  = key.slice(0, atIdx);
     const ver = key.slice(atIdx + 1);
+
+    stopModalPoll();
+    modalKey = key;
 
     // 先開 modal，填「載入中」
     $("#modal-software").textContent = sw;
@@ -355,15 +402,41 @@
 
     try {
       const v = await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}`);
+      if (modalKey !== key) return;
       $("#modal-date").textContent = v.released_at ? "發布於 " + v.released_at : "";
-      $("#modal-zh").innerHTML     = mdToHtml(v.changelog_zh || "");
-      $("#modal-raw").textContent  = v.changelog_raw || "";
+      const st = renderChangelogBody(v);
+      if (st === "pending" || st === "translating") startModalPoll(key, sw, ver);
     } catch (e) {
+      if (modalKey !== key) return;
       const msg = e.status === 404 ? "尚無 changelog" : "無法載入 changelog";
       $("#modal-zh").innerHTML = `<p style="color: var(--text-3);">${msg}</p>`;
     }
   }
+
+  async function retryTranslate(sw, ver) {
+    const key = `${sw}@${ver}`;
+    try {
+      await api(`/api/changelog/${encodeURIComponent(sw)}/${encodeURIComponent(ver)}/retry`, { method: "POST" });
+      if (modalKey !== key) return;
+      renderChangelogBody({
+        software: sw,
+        version: ver,
+        translate_status: "translating",
+        changelog_raw: $("#modal-raw").textContent,
+      });
+      startModalPoll(key, sw, ver);
+    } catch (e) {
+      const msg = e.status === 409 ? "翻譯進行中，請稍候"
+        : e.status === 404 ? "找不到此版本"
+        : e.status === 400 ? "尚無原文可翻譯"
+        : (e.message || "重試失敗");
+      toast("err", msg);
+    }
+  }
+
   function closeModal() {
+    stopModalPoll();
+    modalKey = null;
     const ov = $("#modal-overlay");
     ov.style.opacity = "0";
     setTimeout(() => { ov.classList.add("hidden"); ov.classList.remove("flex"); }, 150);
