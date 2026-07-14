@@ -113,16 +113,17 @@ func (s *Server) handleChangelogRetry(w http.ResponseWriter, software, ver strin
 	go func() {
 		defer s.releaseTranslate(key)
 		if fn == nil {
-			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", "translate not configured")
+			// Keep existing zh; only mark status failed.
+			_ = s.st.SetTranslateStatus(software, ver, "failed", "translate not configured")
 			return
 		}
 		out, err := fn(raw)
 		if err != nil {
-			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", err.Error())
+			_ = s.st.SetTranslateStatus(software, ver, "failed", err.Error())
 			return
 		}
 		if strings.TrimSpace(out) == "" {
-			_ = s.st.UpdateTranslateResult(software, ver, "", "failed", "empty translation")
+			_ = s.st.SetTranslateStatus(software, ver, "failed", "empty translation")
 			return
 		}
 		_ = s.st.UpdateTranslateResult(software, ver, out, "ready", "")

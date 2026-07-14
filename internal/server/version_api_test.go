@@ -175,6 +175,40 @@ func TestChangelogRetryNotFound(t *testing.T) {
 	}
 }
 
+func TestChangelogRetryFailureKeepsZh(t *testing.T) {
+	srv, st := vtServer(t)
+	st.AddVersion("cc", "5.0.0", "", "## raw", "既有中文")
+	st.SetTranslateStatus("cc", "5.0.0", "ready", "")
+	done := make(chan struct{})
+	srv.TranslateFn = func(raw string) (string, error) {
+		defer close(done)
+		return "", errors.New("lm down")
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/api/changelog/cc/5.0.0/retry", nil))
+	if rec.Code != 200 {
+		t.Fatalf("retry code %d %s", rec.Code, rec.Body)
+	}
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("translate did not finish")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		v, _ := st.GetVersion("cc", "5.0.0")
+		if v.TranslateStatus == "failed" && v.TranslateError == "lm down" {
+			if v.ChangelogZh != "既有中文" {
+				t.Fatalf("zh wiped on failure: %q", v.ChangelogZh)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	v, _ := st.GetVersion("cc", "5.0.0")
+	t.Fatalf("want failed/lm down keeping zh got status=%q zh=%q err=%q", v.TranslateStatus, v.ChangelogZh, v.TranslateError)
+}
+
 func TestInstallsNoTranslateStatus(t *testing.T) {
 	srv, _ := vtServer(t)
 	rec := httptest.NewRecorder()

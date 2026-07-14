@@ -462,6 +462,7 @@ func (s *Store) SetTranslateStatus(software, ver, status, errMsg string) error {
 }
 
 // BackfillTranslateStatus fills empty translate_status on legacy rows (called from Open).
+// Also recovers stale translating rows left by process restart (in-memory work is gone).
 func (s *Store) BackfillTranslateStatus() error {
 	if _, err := s.db.Exec(`UPDATE versions SET translate_status='ready', translate_error=''
 		WHERE COALESCE(changelog_zh,'') != '' AND COALESCE(translate_status,'') = ''`); err != nil {
@@ -473,6 +474,11 @@ func (s *Store) BackfillTranslateStatus() error {
 	}
 	if _, err := s.db.Exec(`UPDATE versions SET translate_status='none'
 		WHERE COALESCE(changelog_raw,'') = '' AND COALESCE(changelog_zh,'') = '' AND COALESCE(translate_status,'') = ''`); err != nil {
+		return err
+	}
+	// Process restart clears in-memory translate work; any DB 'translating' is stale.
+	if _, err := s.db.Exec(`UPDATE versions SET translate_status='failed', translate_error='interrupted',
+		translate_updated_at=datetime('now') WHERE translate_status='translating'`); err != nil {
 		return err
 	}
 	return nil

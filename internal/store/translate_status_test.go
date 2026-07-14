@@ -46,3 +46,30 @@ func TestBackfillTranslateStatus(t *testing.T) {
 		t.Fatalf("a=%q b=%q c=%q", va.TranslateStatus, vb.TranslateStatus, vc.TranslateStatus)
 	}
 }
+
+func TestBackfillRecoversStuckTranslating(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "c.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if err := s.AddVersion("cc", "1.0.0", "", "## raw", "既有中文"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetTranslateStatus("cc", "1.0.0", "translating", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.BackfillTranslateStatus(); err != nil {
+		t.Fatal(err)
+	}
+	v, err := s.GetVersion("cc", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v.TranslateStatus != "failed" || v.TranslateError != "interrupted" {
+		t.Fatalf("want failed/interrupted got status=%q err=%q", v.TranslateStatus, v.TranslateError)
+	}
+	if v.ChangelogZh != "既有中文" {
+		t.Fatalf("zh should be preserved, got %q", v.ChangelogZh)
+	}
+}
