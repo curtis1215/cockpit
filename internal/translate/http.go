@@ -2,6 +2,7 @@ package translate
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,27 +15,40 @@ import (
 // Config 為 OpenAI 相容（LM Studio）翻譯端點設定；Endpoint 空字串代表未設定。
 // json tags 同時作為 /api/translate/config 的線上格式。
 type Config struct {
-	Endpoint  string `json:"endpoint"`
-	Model     string `json:"model"`
-	MaxTokens int    `json:"max_tokens"`
+	Endpoint   string `json:"endpoint"`
+	Model      string `json:"model"`
+	MaxTokens  int    `json:"max_tokens"`
+	TimeoutSec int    `json:"timeout_sec"`
 }
 
 const defaultMaxTokens = 4096
 
-// 共用 client：連線可 keep-alive 重用，避免每次翻譯丟棄整個 Transport。
-var httpClient = &http.Client{Timeout: 120 * time.Second}
+// 共用 client：不設全域 Timeout，由每次 request 的 context 控制 deadline。
+// Transport 可 keep-alive 重用，避免每次翻譯丟棄整個 Transport。
+var httpClient = &http.Client{}
+
+// effectiveTimeout 回傳設定的 timeout；TimeoutSec <= 0 時預設 300s。
+func effectiveTimeout(cfg Config) time.Duration {
+	sec := cfg.TimeoutSec
+	if sec <= 0 {
+		sec = defaultTimeoutSec
+	}
+	return time.Duration(sec) * time.Second
+}
 
 // NewDynamic：每次翻譯時呼叫 cfgFn 取得當前設定——端點已設走 HTTP，
 // 未設 fallback 到 shell 指令（cmd 空字串用預設 claude -p）。
 // 設定改動（WebUI 寫入 DB）即時生效，不需重啟。
 func NewDynamic(cfgFn func() Config, cmd string) *Translator {
-	shell := NewWithCmd(cmd)
+	if strings.TrimSpace(cmd) == "" {
+		cmd = defaultCmd
+	}
 	return &Translator{Run: func(prompt string) (string, error) {
 		cfg := cfgFn()
 		// endpoint 與 model 都備齊才走 HTTP；任一缺（含「只存了端點、還沒選模型」
 		// 的中間狀態）一律 fallback 到 shell，不會用空 model 打壞請求。
 		if strings.TrimSpace(cfg.Endpoint) == "" || strings.TrimSpace(cfg.Model) == "" {
-			return shell.Run(prompt)
+			return shellRun(cmd, prompt, effectiveTimeout(cfg))
 		}
 		return httpRun(cfg, prompt)
 	}}
@@ -64,7 +78,14 @@ func httpRun(cfg Config, prompt string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := httpClient.Post(BaseURL(cfg.Endpoint)+"/v1/chat/completions", "application/json", bytes.NewReader(body))
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout(cfg))
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, BaseURL(cfg.Endpoint)+"/v1/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", err
 	}
