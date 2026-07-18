@@ -21,7 +21,13 @@ type Config struct {
 	TimeoutSec int    `json:"timeout_sec"`
 }
 
-const defaultMaxTokens = 4096
+// defaultMaxTokens：未設定 max_tokens 時的預設值。
+// reasoning 模型（如 gemma-4）思考 token 與輸出共用配額，4096 在長 changelog
+// 下仍常 finish_reason=length；16384 留給思考 + 摘要輸出足夠 headroom。
+const defaultMaxTokens = 16384
+
+// maxTokensCap：自動重試加倍時的上限，避免無限膨脹。
+const maxTokensCap = 32768
 
 // 共用 client：不設全域 Timeout，由每次 request 的 context 控制 deadline。
 // Transport 可 keep-alive 重用，避免每次翻譯丟棄整個 Transport。
@@ -69,6 +75,37 @@ func httpRun(cfg Config, prompt string) (string, error) {
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
 	}
+	// 整段翻譯共用同一個 deadline（含可能的一次重試），避免重試把 timeout 加倍。
+	ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout(cfg))
+	defer cancel()
+
+	out, finish, err := httpComplete(ctx, cfg, prompt, maxTokens)
+	if err != nil {
+		return "", err
+	}
+	// finish_reason=length：半句話不能存檔。reasoning 模型常因思考吃光額度；
+	// 在 cap 內加倍重試一次，免使用者反覆手動調 max_tokens。
+	if finish == "length" {
+		retry := maxTokens * 2
+		if retry > maxTokensCap {
+			retry = maxTokensCap
+		}
+		if retry > maxTokens {
+			out, finish, err = httpComplete(ctx, cfg, prompt, retry)
+			if err != nil {
+				return "", err
+			}
+			maxTokens = retry
+		}
+		if finish == "length" {
+			return "", fmt.Errorf("translation truncated by max_tokens=%d (raise it; reasoning models need headroom)", maxTokens)
+		}
+	}
+	return out, nil
+}
+
+// httpComplete 打一次 /v1/chat/completions，回 content、finish_reason。
+func httpComplete(ctx context.Context, cfg Config, prompt string, maxTokens int) (content, finishReason string, err error) {
 	body, err := json.Marshal(map[string]any{
 		"model":       cfg.Model,
 		"messages":    []map[string]string{{"role": "user", "content": prompt}},
@@ -76,37 +113,30 @@ func httpRun(cfg Config, prompt string) (string, error) {
 		"max_tokens":  maxTokens,
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), effectiveTimeout(cfg))
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, BaseURL(cfg.Endpoint)+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return "", fmt.Errorf("translate endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+		return "", "", fmt.Errorf("translate endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	var cc chatCompletions
 	if err := json.NewDecoder(resp.Body).Decode(&cc); err != nil {
-		return "", err
+		return "", "", err
 	}
 	if len(cc.Choices) == 0 {
-		return "", errors.New("translate endpoint returned no choices")
+		return "", "", errors.New("translate endpoint returned no choices")
 	}
-	// 被 max_tokens 截斷的輸出是半句話，存進 DB 比沒翻更糟——當錯誤處理，
-	// 走呼叫端的 error event（reasoning 模型 max_tokens 太小時就會這樣）。
-	if cc.Choices[0].FinishReason == "length" {
-		return "", fmt.Errorf("translation truncated by max_tokens=%d (raise it; reasoning models need headroom)", maxTokens)
-	}
-	return cc.Choices[0].Message.Content, nil
+	return cc.Choices[0].Message.Content, cc.Choices[0].FinishReason, nil
 }
 
 // BaseURL 正規化使用者輸入的端點：去尾斜線與尾端 /v1

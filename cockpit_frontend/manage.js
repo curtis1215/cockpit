@@ -777,7 +777,7 @@
     }
   }
 
-  const TR_RECOMMENDED_TOKENS = 4096; // reasoning 模型思考會吃 token，低於此值容易輸出空翻譯
+  const TR_RECOMMENDED_TOKENS = 16384; // reasoning 模型思考會吃 token，低於此值容易截斷/空翻譯
 
   function trFormBody() {
     return {

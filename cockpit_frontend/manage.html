@@ -151,7 +151,7 @@
           </div>
           <div>
             <label for="tr-max-tokens" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Max tokens</label>
-            <input id="tr-max-tokens" class="field mono" style="font-size:.75rem;" type="number" min="0" step="256" value="4096" />
+            <input id="tr-max-tokens" class="field mono" style="font-size:.75rem;" type="number" min="0" step="256" value="16384" />
           </div>
           <div>
             <label for="tr-timeout-sec" style="display:block;font-size:11.5px;font-weight:600;color:var(--text-2);margin-bottom:5px;">Timeout（秒）</label>
@@ -159,7 +159,7 @@
           </div>
         </div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:12px;">
-          <p style="font-size:12px;color:var(--text-3);margin:0;">⚠ Max tokens 建議 ≥ 4096；Timeout 預設 300（範圍 30–900），reasoning 模型建議 ≥ 180。</p>
+          <p style="font-size:12px;color:var(--text-3);margin:0;">⚠ Max tokens 建議 ≥ 16384；Timeout 預設 300（範圍 30–900），reasoning 模型建議 ≥ 180。截斷時 server 會自動加倍重試一次（上限 32768）。</p>
           <button id="tr-save" class="btn btn-primary" style="flex:none;">儲存</button>
         </div>
       </div>

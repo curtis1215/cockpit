@@ -71,8 +71,8 @@ func TestHTTPMaxTokensDefault(t *testing.T) {
 	if tr.Changelog("raw") != "ok" {
 		t.Fatal("translate failed")
 	}
-	if mt, _ := got["max_tokens"].(float64); mt != 4096 {
-		t.Fatalf("default max_tokens = %v, want 4096", got["max_tokens"])
+	if mt, _ := got["max_tokens"].(float64); mt != float64(defaultMaxTokens) {
+		t.Fatalf("default max_tokens = %v, want %d", got["max_tokens"], defaultMaxTokens)
 	}
 }
 
@@ -98,8 +98,14 @@ func TestHTTPEmptyContent(t *testing.T) {
 }
 
 func TestHTTPTruncatedByLength(t *testing.T) {
-	// finish_reason=length 代表輸出被 max_tokens 截斷——半句翻譯不能當成功存檔。
+	// 兩次都 finish_reason=length（重試仍截斷）→ 不能當成功存檔。
+	var calls int
+	var lastMT float64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		lastMT, _ = body["max_tokens"].(float64)
 		json.NewEncoder(w).Encode(map[string]any{
 			"choices": []map[string]any{
 				{"message": map[string]any{"content": "被截斷的半句翻"}, "finish_reason": "length"},
@@ -107,9 +113,76 @@ func TestHTTPTruncatedByLength(t *testing.T) {
 		})
 	}))
 	defer srv.Close()
-	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: "m"} }, "")
+	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: "m", MaxTokens: 4096} }, "")
 	if out := tr.Changelog("raw"); out != "" {
 		t.Fatalf("truncated output should yield empty, got %q", out)
+	}
+	if calls != 2 {
+		t.Fatalf("want 2 attempts (retry once), got %d", calls)
+	}
+	if lastMT != 8192 {
+		t.Fatalf("retry max_tokens = %v, want 8192", lastMT)
+	}
+	_, err := tr.ChangelogResult("raw")
+	if err == nil || !strings.Contains(err.Error(), "max_tokens=8192") {
+		t.Fatalf("error should mention raised max_tokens, got %v", err)
+	}
+}
+
+func TestHTTPTruncatedRetriesThenOK(t *testing.T) {
+	// 第一次 length，加倍重試後 stop → 成功。
+	var calls int
+	var tokens []float64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		mt, _ := body["max_tokens"].(float64)
+		tokens = append(tokens, mt)
+		reason, content := "length", "半句"
+		if calls >= 2 {
+			reason, content = "stop", "完整中文摘要"
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": content}, "finish_reason": reason},
+			},
+		})
+	}))
+	defer srv.Close()
+	tr := NewDynamic(func() Config { return Config{Endpoint: srv.URL, Model: "m", MaxTokens: 4096} }, "")
+	out, err := tr.ChangelogResult("raw")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if out != "完整中文摘要" {
+		t.Fatalf("got %q", out)
+	}
+	if calls != 2 || tokens[0] != 4096 || tokens[1] != 8192 {
+		t.Fatalf("calls=%d tokens=%v", calls, tokens)
+	}
+}
+
+func TestHTTPTruncatedAtCapNoRetry(t *testing.T) {
+	// 已達 cap 時加倍無效，只打一次。
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "半句"}, "finish_reason": "length"},
+			},
+		})
+	}))
+	defer srv.Close()
+	tr := NewDynamic(func() Config {
+		return Config{Endpoint: srv.URL, Model: "m", MaxTokens: maxTokensCap}
+	}, "")
+	if out := tr.Changelog("raw"); out != "" {
+		t.Fatalf("truncated at cap should fail, got %q", out)
+	}
+	if calls != 1 {
+		t.Fatalf("want 1 call at cap, got %d", calls)
 	}
 }
 
