@@ -22,6 +22,7 @@ func TestParse(t *testing.T) {
 
 func TestCompare(t *testing.T) {
 	check := func(cur, lat, wantS string, wantN int) {
+		t.Helper()
 		s, n := Compare(cur, lat)
 		if s != wantS || n != wantN {
 			t.Fatalf("Compare(%q,%q)=(%q,%d) want (%q,%d)", cur, lat, s, n, wantS, wantN)
@@ -31,4 +32,13 @@ func TestCompare(t *testing.T) {
 	check("2.1.101", "2.1.101", "up_to_date", 0)
 	check("1.0.0", "0.9.0", "up_to_date", 0)
 	check("", "2.1.101", "unknown", 0)
+
+	// openclaw / npm calver：-N 為同日修訂，應視為較新（勿再 unknown）
+	check("2026.7.1", "2026.7.1-2", "behind", 1)
+	check("2026.6.11", "2026.7.1-2", "behind", 1)
+	check("2026.7.1-2", "2026.7.1-2", "up_to_date", 0)
+	check("2026.7.1-2", "2026.7.1", "up_to_date", 0)
+	check("2026.7.1-1", "2026.7.1-2", "behind", 1)
+	check("v2026.7.1", "2026.7.1-2", "behind", 1)
+	check("1.2.3+build", "1.2.3", "up_to_date", 0)
 }
