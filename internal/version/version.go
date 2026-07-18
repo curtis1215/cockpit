@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-var semver = regexp.MustCompile(`(\d+(?:\.\d+){1,3})`)
+// 預設版號：1.2 / 1.2.3 / 1.2.3.4，可選 npm/calver 後綴 -2、-beta.1（勿吃掉括號後文字）。
+var semver = regexp.MustCompile(`(\d+(?:\.\d+){1,3}(?:-[0-9A-Za-z.]+)?)`)
 
 // Parse 從文字抽版本：customRegex 為空用預設 semver（group1）；自訂 regex 有 capture group 用 group1、否則整段；非法 regex 回 ""。
 func Parse(text, customRegex string) string {

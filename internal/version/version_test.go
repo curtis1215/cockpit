@@ -3,7 +3,15 @@ package version
 import "testing"
 
 func TestParse(t *testing.T) {
-	cases := map[string]string{"2.1.101": "2.1.101", "claude 2.1.98 (x)": "2.1.98", "v0.9.0": "0.9.0", "no ver": ""}
+	cases := map[string]string{
+		"2.1.101":                    "2.1.101",
+		"claude 2.1.98 (x)":          "2.1.98",
+		"v0.9.0":                     "0.9.0",
+		"no ver":                     "",
+		"2026.7.1-2":                 "2026.7.1-2",
+		"OpenClaw 2026.7.1-2 (abc)":  "2026.7.1-2",
+		"v2026.7.1-beta.6":           "2026.7.1-beta.6",
+	}
 	for in, want := range cases {
 		if got := Parse(in, ""); got != want {
 			t.Fatalf("Parse(%q)=%q want %q", in, got, want)
