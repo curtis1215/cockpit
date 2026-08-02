@@ -757,13 +757,31 @@
   }
 
   // ── 翻譯設定 ─────────────────────────────────────────────────────────────
-  const trEndpoint   = $("#tr-endpoint");
-  const trModel      = $("#tr-model");
-  const trMaxTokens  = $("#tr-max-tokens");
-  const trTimeoutSec = $("#tr-timeout-sec");
-  const trModelList  = $("#tr-model-list");
-  const trFetchBtn   = $("#tr-fetch-models");
-  const trSaveBtn    = $("#tr-save");
+  const trEndpoint     = $("#tr-endpoint");
+  const trModel        = $("#tr-model");
+  const trMaxTokens    = $("#tr-max-tokens");
+  const trTimeoutSec   = $("#tr-timeout-sec");
+  const trApiKey       = $("#tr-api-key");
+  const trApiKeyHint   = $("#tr-api-key-hint");
+  const trClearApiKey  = $("#tr-clear-api-key");
+  const trModelList    = $("#tr-model-list");
+  const trFetchBtn     = $("#tr-fetch-models");
+  const trSaveBtn      = $("#tr-save");
+  let trApiKeySet = false; // 伺服器是否已存 key（GET 只回 flag，不回明文）
+
+  function syncApiKeyUI() {
+    trApiKeyHint.style.display = trApiKeySet ? "" : "none";
+    trClearApiKey.disabled = !trApiKeySet && !trApiKey.value.trim();
+    if (trClearApiKey.checked) {
+      trApiKey.disabled = true;
+      trApiKey.placeholder = "將清除已存的 API key";
+    } else {
+      trApiKey.disabled = false;
+      trApiKey.placeholder = trApiKeySet
+        ? "已設定（留空＝不變）"
+        : "sk-…（本機 LM Studio 可留空）";
+    }
+  }
 
   async function loadTranslateConfig() {
     try {
@@ -772,20 +790,33 @@
       trModel.value = c.model || "";
       if (c.max_tokens > 0) trMaxTokens.value = c.max_tokens;
       if (c.timeout_sec > 0) trTimeoutSec.value = c.timeout_sec;
+      trApiKeySet = !!c.api_key_set;
+      trApiKey.value = "";
+      trClearApiKey.checked = false;
+      syncApiKeyUI();
     } catch (e) {
       toast("err", "翻譯設定載入失敗：" + e.message);
     }
   }
 
-  const TR_RECOMMENDED_TOKENS = 16384; // reasoning 模型思考會吃 token，低於此值容易截斷/空翻譯
+  // 本機 reasoning 模型需要高 max_tokens；雲端一般模型不需此警告門檻。
+  const TR_RECOMMENDED_TOKENS = 16384;
 
+  // api_key 語意：有輸入 → 覆寫；勾選清除 → ""；否則省略（保留既有）。
   function trFormBody() {
-    return {
+    const body = {
       endpoint: trEndpoint.value.trim(),
       model: trModel.value.trim(),
       max_tokens: parseInt(trMaxTokens.value, 10) || 0,
       timeout_sec: Number(trTimeoutSec.value) || 300,
     };
+    if (trClearApiKey.checked) {
+      body.api_key = "";
+    } else {
+      const k = trApiKey.value.trim();
+      if (k) body.api_key = k;
+    }
+    return body;
   }
 
   async function putTranslateConfig(body) {
@@ -797,13 +828,19 @@
   }
 
   // 拉取模型只對「已儲存的端點」進行（server 不接受任意 endpoint，避免 SSRF），
-  // 所以先把目前表單的端點存起來，再拉清單。
+  // 所以先把目前表單（含 api_key）存起來，再拉清單。
   async function fetchTranslateModels() {
     const ep = trEndpoint.value.trim();
     if (!ep) { toast("warn", "請先填端點 URL"); return; }
     trFetchBtn.disabled = true;
     try {
       await putTranslateConfig(trFormBody());
+      // 拉取前若有送 key，同步本地 flag，避免之後誤清
+      if (trClearApiKey.checked) trApiKeySet = false;
+      else if (trApiKey.value.trim()) trApiKeySet = true;
+      trApiKey.value = "";
+      trClearApiKey.checked = false;
+      syncApiKeyUI();
       const r = await api("/api/translate/models");
       const models = r.models || [];
       if (!models.length) { toast("warn", "端點可連線，但沒有已載入的模型"); return; }
@@ -819,13 +856,19 @@
 
   async function saveTranslateConfig() {
     const body = trFormBody();
-    if (body.endpoint && body.max_tokens > 0 && body.max_tokens < TR_RECOMMENDED_TOKENS &&
-        !confirm(`Max tokens ${body.max_tokens} 低於建議值 ${TR_RECOMMENDED_TOKENS}，reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
+    const looksLocal = /localhost|127\.0\.0\.1|100\.\d+\.\d+\.\d+|192\.168\.|10\.\d+\./i.test(body.endpoint || "");
+    if (looksLocal && body.endpoint && body.max_tokens > 0 && body.max_tokens < TR_RECOMMENDED_TOKENS &&
+        !confirm(`Max tokens ${body.max_tokens} 低於建議值 ${TR_RECOMMENDED_TOKENS}，本機 reasoning 模型可能輸出空翻譯。仍要儲存？`)) {
       return;
     }
     trSaveBtn.disabled = true;
     try {
       await putTranslateConfig(body);
+      if (trClearApiKey.checked) trApiKeySet = false;
+      else if (body.api_key) trApiKeySet = true;
+      trApiKey.value = "";
+      trClearApiKey.checked = false;
+      syncApiKeyUI();
       toast("ok", body.endpoint ? "翻譯設定已儲存（即時生效）" : "已清除端點，翻譯回退 translate_cmd");
     } catch (e) {
       toast("err", "儲存失敗：" + e.message);
@@ -834,6 +877,8 @@
     }
   }
 
+  trApiKey.addEventListener("input", syncApiKeyUI);
+  trClearApiKey.addEventListener("change", syncApiKeyUI);
   trFetchBtn.addEventListener("click", fetchTranslateModels);
   trSaveBtn.addEventListener("click", saveTranslateConfig);
   loadTranslateConfig();

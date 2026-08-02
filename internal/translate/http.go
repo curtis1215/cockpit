@@ -12,13 +12,16 @@ import (
 	"time"
 )
 
-// Config 為 OpenAI 相容（LM Studio）翻譯端點設定；Endpoint 空字串代表未設定。
-// json tags 同時作為 /api/translate/config 的線上格式。
+// Config 為 OpenAI 相容翻譯端點設定（官方 OpenAI、LM Studio 等）。
+// Endpoint 空字串代表未設定。ApiKey 僅供 server 內部 HTTP 呼叫使用，
+// GET /api/translate/config 不得回傳明文（見 server 的 api_key_set）。
 type Config struct {
 	Endpoint   string `json:"endpoint"`
 	Model      string `json:"model"`
 	MaxTokens  int    `json:"max_tokens"`
 	TimeoutSec int    `json:"timeout_sec"`
+	// ApiKey：可選；有值時送 Authorization: Bearer。本機 LM Studio 可留空。
+	ApiKey string `json:"-"`
 }
 
 // defaultMaxTokens：未設定 max_tokens 時的預設值。
@@ -120,6 +123,7 @@ func httpComplete(ctx context.Context, cfg Config, prompt string, maxTokens int)
 		return "", "", err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	SetAuthHeader(req, cfg.ApiKey)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", "", err
@@ -146,4 +150,12 @@ func BaseURL(endpoint string) string {
 	base = strings.TrimRight(base, "/")
 	base = strings.TrimSuffix(base, "/v1")
 	return base
+}
+
+// SetAuthHeader 在 key 非空時設定 Authorization: Bearer <key>。
+// 供 chat/completions 與 /v1/models 代理共用。
+func SetAuthHeader(req *http.Request, apiKey string) {
+	if k := strings.TrimSpace(apiKey); k != "" {
+		req.Header.Set("Authorization", "Bearer "+k)
+	}
 }

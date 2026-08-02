@@ -274,3 +274,38 @@ func TestChangelogResultEmptyContentError(t *testing.T) {
 		t.Fatalf("error should contain empty: %v", err)
 	}
 }
+
+func TestHTTPAuthHeader(t *testing.T) {
+	// 有 ApiKey → Authorization: Bearer；無 key → 不帶 header（LM Studio 相容）。
+	var gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		json.NewEncoder(w).Encode(map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"content": "ok"}, "finish_reason": "stop"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	tr := NewDynamic(func() Config {
+		return Config{Endpoint: srv.URL, Model: "m", ApiKey: "sk-test-secret"}
+	}, "")
+	if out := tr.Changelog("raw"); out != "ok" {
+		t.Fatalf("got %q", out)
+	}
+	if gotAuth != "Bearer sk-test-secret" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+
+	gotAuth = "stale"
+	trNoKey := NewDynamic(func() Config {
+		return Config{Endpoint: srv.URL, Model: "m"}
+	}, "")
+	if out := trNoKey.Changelog("raw"); out != "ok" {
+		t.Fatalf("no-key got %q", out)
+	}
+	if gotAuth != "" {
+		t.Fatalf("empty ApiKey must not send Authorization, got %q", gotAuth)
+	}
+}

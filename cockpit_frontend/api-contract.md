@@ -98,8 +98,8 @@ def list_installs(req: Request, machine: str = "", status: str = "", q: str = ""
 | `POST` | `/api/check` | 觸發重新檢查所有來源（非同步） | `202` + `{job_run_id}` | `#check-btn` 的 `[API]` 處 |
 | `GET` | `/api/changelog/{software}/{version}` | 單一版本 changelog（含翻譯狀態） | `Version` | `openChangelog()`；`pending`/`translating` 時 modal 每 2.5s 輪詢 |
 | `POST` | `/api/changelog/{software}/{version}/retry` | 非同步重試翻譯 | `200` `{ok, translate_status:translating}`；`400` 無 raw；`404`；`409` 已在翻譯 | modal「重試翻譯」 |
-| `GET` | `/api/translate/config` | 翻譯端點設定 | `{endpoint, model, max_tokens, timeout_sec}` | manage 翻譯設定；`timeout_sec` 預設 300、clamp 30–900 |
-| `PUT` | `/api/translate/config` | 寫入翻譯設定（即時生效） | `{ok:true}` | manage 儲存 |
+| `GET` | `/api/translate/config` | 翻譯端點設定 | `{endpoint, model, max_tokens, timeout_sec, api_key_set}` | manage 翻譯設定；**不回傳** api_key 明文；`timeout_sec` 預設 300、clamp 30–900 |
+| `PUT` | `/api/translate/config` | 寫入翻譯設定（即時生效） | `{ok:true}`；body 可含 `api_key`：省略＝保留、非空＝覆寫、`""`＝清除 | manage 儲存 |
 | `GET` | `/api/jobs?limit=` | 最近工作清單 | `Job[]` | `renderRecentJobs()`（現為 `MOCK.JOBS`） |
 | `POST` | `/api/jobs` `{install_id}` | 建立更新工作 | `201` + `Job`（`status=queued/running`） | `startUpdate()` 的 `[API]` 處 |
 | `GET` | `/api/jobs/{id}` | 單一 job（含已累積 log） | `Job` | 點選最近工作時補抓 |

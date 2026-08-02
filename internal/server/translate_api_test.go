@@ -28,12 +28,106 @@ func TestTranslateConfigGetDefault(t *testing.T) {
 		Endpoint  string `json:"endpoint"`
 		Model     string `json:"model"`
 		MaxTokens int    `json:"max_tokens"`
+		APIKeySet bool   `json:"api_key_set"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Endpoint != "" || got.Model != "" || got.MaxTokens != 0 {
+	if got.Endpoint != "" || got.Model != "" || got.MaxTokens != 0 || got.APIKeySet {
 		t.Fatalf("default should be empty: %+v", got)
+	}
+}
+
+func TestTranslateConfigAPIKey(t *testing.T) {
+	srv, st := trServer(t)
+
+	// PUT with api_key → stored；GET 只回 api_key_set，不回明文
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"https://api.openai.com","model":"gpt-4o-mini","max_tokens":4096,"api_key":"sk-secret-1"}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put key: code %d %s", rec.Code, rec.Body)
+	}
+	if v := st.GetSetting("translate.api_key"); v != "sk-secret-1" {
+		t.Fatalf("stored api_key %q", v)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/config", nil))
+	body := rec.Body.String()
+	if strings.Contains(body, "sk-secret-1") {
+		t.Fatalf("GET must not leak api_key plaintext: %s", body)
+	}
+	var got struct {
+		APIKeySet bool   `json:"api_key_set"`
+		Endpoint  string `json:"endpoint"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if !got.APIKeySet || got.Endpoint != "https://api.openai.com" {
+		t.Fatalf("GET after put: %+v", got)
+	}
+	// TranslateConfig() 內部要能讀到明文（給 HTTP client）
+	if k := srv.TranslateConfig().ApiKey; k != "sk-secret-1" {
+		t.Fatalf("internal ApiKey %q", k)
+	}
+
+	// 省略 api_key → 保留既有
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"https://api.openai.com","model":"gpt-4o-mini","max_tokens":2048}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put omit: code %d", rec.Code)
+	}
+	if v := st.GetSetting("translate.api_key"); v != "sk-secret-1" {
+		t.Fatalf("omit must keep key, got %q", v)
+	}
+	if v := st.GetSetting("translate.max_tokens"); v != "2048" {
+		t.Fatalf("max_tokens updated want 2048 got %q", v)
+	}
+
+	// 明確 api_key:"" → 清除
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("PUT", "/api/translate/config",
+		strings.NewReader(`{"endpoint":"https://api.openai.com","model":"gpt-4o-mini","max_tokens":2048,"api_key":""}`)))
+	if rec.Code != 200 {
+		t.Fatalf("put clear: code %d", rec.Code)
+	}
+	if v := st.GetSetting("translate.api_key"); v != "" {
+		t.Fatalf("clear must empty key, got %q", v)
+	}
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/config", nil))
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.APIKeySet {
+		t.Fatal("api_key_set should be false after clear")
+	}
+}
+
+func TestTranslateModelsSendsAuth(t *testing.T) {
+	var gotAuth string
+	lm := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		if r.URL.Path != "/v1/models" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(`{"data":[{"id":"gpt-4o-mini"}],"object":"list"}`))
+	}))
+	defer lm.Close()
+
+	srv, st := trServer(t)
+	st.SetSetting("translate.endpoint", lm.URL)
+	st.SetSetting("translate.api_key", "sk-models-key")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/translate/models", nil))
+	if rec.Code != 200 {
+		t.Fatalf("code %d: %s", rec.Code, rec.Body)
+	}
+	if gotAuth != "Bearer sk-models-key" {
+		t.Fatalf("models proxy Authorization = %q", gotAuth)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/curtis1215/cockpit/internal/translate"
@@ -16,6 +17,7 @@ const (
 	setTranslateModel      = "translate.model"
 	setTranslateMaxTokens  = "translate.max_tokens"
 	setTranslateTimeoutSec = "translate.timeout_sec"
+	setTranslateAPIKey     = "translate.api_key"
 )
 
 // proxyClient 給 models 代理用：短 timeout、共用連線。
@@ -41,7 +43,7 @@ func clampTimeout(sec int) int {
 }
 
 // TranslateConfig 讀取目前儲存的翻譯端點設定（供 serve.go 注入 translate.NewDynamic）。
-// TimeoutSec 未設定或 0 時回傳 effective 300。
+// TimeoutSec 未設定或 0 時回傳 effective 300。含 ApiKey 明文（僅 server 內部使用）。
 func (s *Server) TranslateConfig() translate.Config {
 	maxTokens, _ := strconv.Atoi(s.st.GetSetting(setTranslateMaxTokens))
 	timeoutSec, _ := strconv.Atoi(s.st.GetSetting(setTranslateTimeoutSec))
@@ -50,7 +52,29 @@ func (s *Server) TranslateConfig() translate.Config {
 		Model:      s.st.GetSetting(setTranslateModel),
 		MaxTokens:  maxTokens,
 		TimeoutSec: clampTimeout(timeoutSec),
+		ApiKey:     s.st.GetSetting(setTranslateAPIKey),
 	}
+}
+
+// translateConfigPublic 是 GET /api/translate/config 的線上格式；不含 API key 明文。
+type translateConfigPublic struct {
+	Endpoint   string `json:"endpoint"`
+	Model      string `json:"model"`
+	MaxTokens  int    `json:"max_tokens"`
+	TimeoutSec int    `json:"timeout_sec"`
+	APIKeySet  bool   `json:"api_key_set"`
+}
+
+// translateConfigPut 是 PUT body。ApiKey 用指標：
+//   - nil（欄位省略）→ 保留既有 key
+//   - 非空字串 → 覆寫
+//   - "" → 清除
+type translateConfigPut struct {
+	Endpoint   string  `json:"endpoint"`
+	Model      string  `json:"model"`
+	MaxTokens  int     `json:"max_tokens"`
+	TimeoutSec int     `json:"timeout_sec"`
+	ApiKey     *string `json:"api_key"`
 }
 
 // validEndpointURL 驗證使用者提供的端點是 host 非空的 http(s) URL。
@@ -62,9 +86,16 @@ func validEndpointURL(s string) bool {
 func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, 200, s.TranslateConfig())
+		cfg := s.TranslateConfig()
+		writeJSON(w, 200, translateConfigPublic{
+			Endpoint:   cfg.Endpoint,
+			Model:      cfg.Model,
+			MaxTokens:  cfg.MaxTokens,
+			TimeoutSec: cfg.TimeoutSec,
+			APIKeySet:  strings.TrimSpace(cfg.ApiKey) != "",
+		})
 	case http.MethodPut:
-		var body translate.Config
+		var body translateConfigPut
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			writeJSON(w, 400, map[string]string{"error": "bad json"})
 			return
@@ -79,15 +110,18 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		// model 可暫空（前端「拉取模型」會先存端點再拉清單）；翻譯端在 model 空時
 		// 走 fallback，不會用空 model 打壞請求。
-		// 單一 transaction 寫入：避免中途失敗留下半套設定（endpoint 有、model 沒有），
-		// NewDynamic 每次翻譯都即時讀，半套設定會直接打出錯誤請求。
+		// 單一 transaction 寫入：避免中途失敗留下半套設定。
 		timeoutSec := clampTimeout(body.TimeoutSec)
-		if err := s.st.SetSettings(map[string]string{
+		kv := map[string]string{
 			setTranslateEndpoint:   body.Endpoint,
 			setTranslateModel:      body.Model,
 			setTranslateMaxTokens:  strconv.Itoa(body.MaxTokens),
 			setTranslateTimeoutSec: strconv.Itoa(timeoutSec),
-		}); err != nil {
+		}
+		if body.ApiKey != nil {
+			kv[setTranslateAPIKey] = strings.TrimSpace(*body.ApiKey)
+		}
+		if err := s.st.SetSettings(kv); err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
@@ -99,7 +133,7 @@ func (s *Server) handleTranslateConfig(w http.ResponseWriter, r *http.Request) {
 
 // handleTranslateModels 代理查詢 OpenAI 相容端點的 /v1/models（避免瀏覽器 CORS，兼連線測試）。
 // 只對「已儲存的端點」拉取——不接受任意 query endpoint，避免 server 被誘導探測任意內網 host
-//（SSRF）。前端需先 PUT 儲存端點再呼叫此 API。
+//（SSRF）。前端需先 PUT 儲存端點再呼叫此 API。有 api_key 時帶 Bearer。
 func (s *Server) handleTranslateModels(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -121,6 +155,7 @@ func (s *Server) handleTranslateModels(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, map[string]string{"error": err.Error()})
 		return
 	}
+	translate.SetAuthHeader(req, s.st.GetSetting(setTranslateAPIKey))
 	resp, err := proxyClient.Do(req)
 	if err != nil {
 		writeJSON(w, 502, map[string]string{"error": "endpoint unreachable: " + err.Error()})
