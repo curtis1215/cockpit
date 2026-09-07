@@ -376,6 +376,10 @@ func (s *Store) DeleteSystemCascade(id string) error {
 		return err
 	}
 	defer tx.Rollback()
+
+	var label string
+	_ = tx.QueryRow(`SELECT label FROM systems WHERE id=?`, id).Scan(&label)
+
 	for _, q := range []string{
 		`DELETE FROM metrics WHERE system_id=?`,
 		`DELETE FROM metrics_latest WHERE system_id=?`,
@@ -385,6 +389,14 @@ func (s *Store) DeleteSystemCascade(id string) error {
 		`DELETE FROM systems WHERE id=?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {
+			return err
+		}
+	}
+	if label != "" {
+		if _, err := tx.Exec(`DELETE FROM installs WHERE machine=?`, label); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(`DELETE FROM jobs WHERE machine=?`, label); err != nil {
 			return err
 		}
 	}
