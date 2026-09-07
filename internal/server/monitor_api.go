@@ -457,15 +457,7 @@ func (s *Server) apiSystemSub(w http.ResponseWriter, r *http.Request) {
 
 	// DELETE: cascade remove
 	if r.Method == http.MethodDelete && sub == "" {
-		if err := s.st.DeleteSystemCascade(id); err != nil {
-			if err == store.ErrNotFound {
-				writeJSON(w, 404, map[string]string{"error": "system not found"})
-				return
-			}
-			writeJSON(w, 500, map[string]string{"error": err.Error()})
-			return
-		}
-		w.WriteHeader(204)
+		s.deleteSystem(w, r, id)
 		return
 	}
 

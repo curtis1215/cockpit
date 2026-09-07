@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/curtis1215/cockpit/internal/inventory"
 	"github.com/curtis1215/cockpit/internal/store"
 )
 
@@ -375,5 +376,90 @@ func TestPatchSystemGroup(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp["group"] != "保留" {
 		t.Fatalf("group = %v, want 保留 (untouched)", resp["group"])
+	}
+}
+
+func TestDeleteSystemCascadesInstallsAndInventory(t *testing.T) {
+	srv, st := vtServer(t)
+
+	// Add a system "box1"
+	id, _, err := st.CreateSystemPending("box1", "worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add an install in store for box1
+	if err := st.UpsertInstall("cc", "box1", "2.1.98", "behind", "t"); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertInstall("solo-app", "box1", "1.0.0", "up_to_date", "t"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Add software installs into srv inventory
+	inv := srv.getInv()
+	for i, sw := range inv.Software {
+		if sw.Name == "cc" {
+			inv.Software[i].Installs = append(inv.Software[i].Installs, inventory.Install{
+				Machine:    "box1",
+				CurrentCmd: "cc --version",
+			})
+		}
+	}
+	inv.Software = append(inv.Software, inventory.Software{
+		Name:         "solo-app",
+		Kind:         "npm",
+		LatestSource: "npm:solo-app",
+		Installs: []inventory.Install{{
+			Machine:    "box1",
+			CurrentCmd: "solo-app --version",
+		}},
+	})
+	_ = srv.setInv(inv, false)
+
+	// Verify before deletion: box1 installs exist
+	insts, _ := st.ListInstalls()
+	var hasBox1 bool
+	for _, in := range insts {
+		if in.Machine == "box1" {
+			hasBox1 = true
+			break
+		}
+	}
+	if !hasBox1 {
+		t.Fatal("expected box1 installs in store before delete")
+	}
+
+	// DELETE /api/systems/{id}
+	rec := doJSON(t, srv, "DELETE", "/api/systems/"+id, "")
+	if rec.Code != 204 {
+		t.Fatalf("delete want 204 got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// 1. Verify store: no installs with machine == "box1"
+	instsAfter, _ := st.ListInstalls()
+	for _, in := range instsAfter {
+		if in.Machine == "box1" {
+			t.Fatalf("found leftover install in store for box1: %+v", in)
+		}
+	}
+
+	// 2. Verify inventory in memory: no box1 installs
+	invAfter := srv.getInv()
+	for _, sw := range invAfter.Software {
+		if sw.Name == "solo-app" {
+			t.Fatalf("solo-app should have been removed when all its installs were removed")
+		}
+		for _, ins := range sw.Installs {
+			if ins.Machine == "box1" {
+				t.Fatalf("found leftover install in inventory for box1: %+v in software %s", ins, sw.Name)
+			}
+		}
+	}
+
+	// 3. Verify GET /api/installs has no box1
+	recInstalls := doJSON(t, srv, "GET", "/api/installs", "")
+	if strings.Contains(recInstalls.Body.String(), "box1") {
+		t.Fatalf("GET /api/installs still contains box1: %s", recInstalls.Body.String())
 	}
 }

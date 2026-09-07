@@ -155,6 +155,68 @@ func (s *Server) regenEnrollToken(w http.ResponseWriter, r *http.Request, id str
 	writeJSON(w, 200, map[string]string{"enroll_token": token})
 }
 
+// deleteSystem handles DELETE /api/systems/{id}: removes the system and cascades to installs and inventory.
+func (s *Server) deleteSystem(w http.ResponseWriter, r *http.Request, id string) {
+	sys, err := s.st.SystemByID(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeJSON(w, 404, map[string]string{"error": "system not found"})
+			return
+		}
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := s.st.DeleteSystemCascade(id); err != nil {
+		writeJSON(w, 500, map[string]string{"error": err.Error()})
+		return
+	}
+	if sys.Label != "" {
+		_ = s.removeInstallsForMachine(sys.Label)
+	}
+	w.WriteHeader(204)
+}
+
+// removeInstallsForMachine removes all installs for the given machine label from the server's inventory and persists it.
+func (s *Server) removeInstallsForMachine(machine string) error {
+	inv := s.getInv()
+	var newSW []inventory.Software
+	changed := false
+	for _, sw := range inv.Software {
+		var remaining []inventory.Install
+		for _, ins := range sw.Installs {
+			if ins.Machine == machine {
+				changed = true
+				continue
+			}
+			remaining = append(remaining, ins)
+		}
+		if len(remaining) > 0 {
+			newSW = append(newSW, inventory.Software{
+				Name:         sw.Name,
+				Kind:         sw.Kind,
+				LatestSource: sw.LatestSource,
+				Changelog:    sw.Changelog,
+				Installs:     remaining,
+			})
+		} else if len(sw.Installs) > 0 {
+			changed = true
+		}
+	}
+	newMachines := make(map[string]inventory.Machine, len(inv.Machines))
+	for k, v := range inv.Machines {
+		if k == machine {
+			changed = true
+			continue
+		}
+		newMachines[k] = v
+	}
+	if !changed {
+		return nil
+	}
+	newInv := inventory.Inventory{Machines: newMachines, Software: newSW}
+	return s.setInv(newInv, true)
+}
+
 // ── Software CRUD ──────────────────────────────────────────────────────────
 
 // handleSoftwareCollection handles POST /api/software.
