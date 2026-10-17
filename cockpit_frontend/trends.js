@@ -272,7 +272,7 @@
         dot.setAttribute("cx", X(i)); dot.setAttribute("cy", Y(v)); dot.style.opacity = "1";
       });
       const rows = seriesList.map((s, si) =>
-        `<div style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:2px;background:${s.color};"></span><span class="tv" style="color:${s.color};">${fmt(s.points[i], s.unit)}</span>${def.legend?`<span class="tt">${def.legend[si]}</span>`:""}</div>`).join("");
+        `<div style="display:flex;align-items:center;gap:6px;"><span style="width:8px;height:8px;border-radius:2px;background:${s.color};"></span><span class="tv" style="color:var(--text);">${fmt(s.points[i], s.unit)}</span>${def.legend?`<span class="tt">${def.legend[si]}</span>`:""}</div>`).join("");
       tip.innerHTML = `<div class="tt" style="margin-bottom:3px;">${seriesList[0].times[i]}</div>${rows}`;
       tip.style.opacity = "1";
       const tw = tip.offsetWidth || 90;

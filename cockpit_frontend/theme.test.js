@@ -158,3 +158,24 @@ test("topo.js #sw-term 底色與字色", () => {
   const js = read("topo.js").toLowerCase();
   assert.match(js, /id="sw-term" style="background:#120e10; color:#e2d5d8;/);
 });
+
+test("api-data.js metricBase 趨勢色", () => {
+  const js = read("api-data.js").toLowerCase();
+  const want = { mem: "#a48fd6", disk: "#6fb58c", gpu: "#e58fb4", netup: "#73aed6", netdown: "#6cc3bd", load: "#d9a95b", temp: "#e59a6f" };
+  for (const [k, c] of Object.entries(want))
+    assert.match(js, new RegExp(`case "${k}":[^\\n]*color: "${c}"`), k);
+});
+test("trends.js 提示框數值用 var(--text)", () => {
+  assert.match(read("trends.js"), /class="tv" style="color:var\(--text\);"/);
+});
+test("topology.html .vm-tag 為藤紫", () => {
+  const h = read("topology.html").toLowerCase();
+  assert.match(h, /\.vm-tag \{[^}]*background:#2e2640; color:#c9b3e6;/);
+  assert.match(h, /html:not\(\.dark\) \.vm-tag \{ background:#ece6f6; color:#6552a0; \}/);
+});
+test("manage.html 下拉箭頭用新灰", () => {
+  assert.ok(read("manage.html").toLowerCase().includes("stroke='%237a6966'"));
+});
+test("index.html 搜尋框 placeholder 用 --text-3", () => {
+  assert.match(read("index.html"), /\.field::placeholder\s*\{\s*color:\s*var\(--text-3\);?\s*\}/);
+});
