@@ -144,3 +144,6 @@ test("色票解析器在 index.html 深色區塊抓到 --accent", () => {
   assert.ok(v.size >= 20);
   assert.ok(v.has("--accent"));
 });
+
+for (const f of ["machine.html", "manage.html", "topology.html"])
+  test(`${f} 兩種模式色票為櫻色`, () => assertPalette(f));
