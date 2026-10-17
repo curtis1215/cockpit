@@ -774,11 +774,11 @@
   let swStreamTimer = null;
   function colorize(line) {
     const esc = line.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-    if (/^✓/.test(line)) return `<span style="color:#4ade80;">${esc}</span>`;
-    if (/^✗/.test(line)) return `<span style="color:#f87171;">${esc}</span>`;
-    if (/^■/.test(line)) return `<span style="color:#9aa4b2;">${esc}</span>`;
-    if (/^▶/.test(line)) return `<span style="color:#7dd3fc;font-weight:600;">${esc}</span>`;
-    if (/^→/.test(line)) return `<span style="color:#c4b5fd;">${esc}</span>`;
+    if (/^✓/.test(line)) return `<span style="color:#a5d8bb;">${esc}</span>`;
+    if (/^✗/.test(line)) return `<span style="color:#f2a0a0;">${esc}</span>`;
+    if (/^■/.test(line)) return `<span style="color:#b3a1a5;">${esc}</span>`;
+    if (/^▶/.test(line)) return `<span style="color:#a9cbe8;font-weight:600;">${esc}</span>`;
+    if (/^→/.test(line)) return `<span style="color:#c9b3e6;">${esc}</span>`;
     return `<span style="opacity:.82;">${esc}</span>`;
   }
   function runUpdate(w) {
@@ -794,7 +794,7 @@
           <svg class="spin" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="var(--warn)" stroke-width="3" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>
           <span style="font-size:12px; color:var(--warn);">更新執行中…</span>
         </div>
-        <div id="sw-term" style="background:#07090c; color:#cdd3db; font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.6; border-radius:10px; padding:11px 13px; max-height:230px; overflow-y:auto;"></div>
+        <div id="sw-term" style="background:#120e10; color:#e2d5d8; font-family:'JetBrains Mono',monospace; font-size:11.5px; line-height:1.6; border-radius:10px; padding:11px 13px; max-height:230px; overflow-y:auto;"></div>
       </div>`;
     const term = $("#sw-term");
     const lines = script.lines; let i = 0;

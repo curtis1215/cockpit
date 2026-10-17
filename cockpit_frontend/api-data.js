@@ -69,13 +69,13 @@
     const m = (window.TOPO && window.TOPO.MACHINE_META[machineId]) || {};
     switch (metric) {
       case "cpu":     return { unit: "%",    pct: true,  color: "var(--accent)" };
-      case "mem":     return { unit: "%",    pct: true,  color: "#a78bfa" };
-      case "disk":    return { unit: "%",    pct: true,  color: "#34d399" };
-      case "gpu":     return { unit: "%",    pct: true,  color: "#f472b6" };
-      case "netUp":   return { unit: "MB/s", pct: false, color: "#38bdf8" };
-      case "netDown": return { unit: "MB/s", pct: false, color: "#22d3ee" };
-      case "load":    return { unit: "",     pct: false, color: "#fbbf24" };
-      case "temp":    return { unit: "°C",   pct: false, color: "#fb923c" };
+      case "mem":     return { unit: "%",    pct: true,  color: "#a48fd6" };
+      case "disk":    return { unit: "%",    pct: true,  color: "#6fb58c" };
+      case "gpu":     return { unit: "%",    pct: true,  color: "#e58fb4" };
+      case "netUp":   return { unit: "MB/s", pct: false, color: "#73aed6" };
+      case "netDown": return { unit: "MB/s", pct: false, color: "#6cc3bd" };
+      case "load":    return { unit: "",     pct: false, color: "#d9a95b" };
+      case "temp":    return { unit: "°C",   pct: false, color: "#e59a6f" };
       default:        return { unit: "",     pct: true,  color: "var(--accent)" };
     }
   }

@@ -17,48 +17,48 @@
 <style>
   /* ---------- 主題色票（dark 為主，light 切換） ---------- */
   :root {
-    --bg:          #f5f6f8;
-    --bg-grid:     #eceef1;
+    --bg:          #fbf6f4;
+    --bg-grid:     #f5ece9;
     --surface:     #ffffff;
-    --surface-2:   #f0f2f4;
-    --surface-3:   #e7eaee;
-    --border:      #e2e6ea;
-    --border-2:    #d3d9df;
-    --text:        #161a1f;
-    --text-2:      #5b636e;
-    --text-3:      #8b93a0;
-    --accent:      #2f63ff;
+    --surface-2:   #f7eeeb;
+    --surface-3:   #f0e3df;
+    --border:      #efe1dd;
+    --border-2:    #e3d0cb;
+    --text:        #463c3c;
+    --text-2:      #5f514f;
+    --text-3:      #7a6966;
+    --accent:      #b05462;
     --accent-ink:  #ffffff;
-    --accent-weak: #eaf0ff;
-    --term-bg:     #0c0f14;
-    --term-text:   #d6dbe2;
+    --accent-weak: #fbe9eb;
+    --term-bg:     #1f191c;
+    --term-text:   #e2d5d8;
 
-    --ok:    #1f9d5b;   --ok-bg:    #e4f5ec;   --ok-bd:    #b9e6cd;
-    --warn:  #b5680a;   --warn-bg:  #fbeede;   --warn-bd:  #f1d5ab;
-    --err:   #cf3030;   --err-bg:   #fbe6e6;   --err-bd:   #f1bfbf;
-    --mut:   #6b7682;   --mut-bg:   #eef1f4;   --mut-bd:   #dde2e7;
+    --ok:    #3f7552;   --ok-bg:    #e7f2eb;   --ok-bd:    #c9e0d1;
+    --warn:  #8a5d1c;   --warn-bg:  #f9efdf;   --warn-bd:  #eedcb8;
+    --err:   #a8444a;   --err-bg:   #f9e4e4;   --err-bd:   #efc6c6;
+    --mut:   #6e5f5d;   --mut-bg:   #f5eeec;   --mut-bd:   #eadfdc;
   }
   html.dark {
-    --bg:          #0a0c10;
-    --bg-grid:     #0e1116;
-    --surface:     #14181e;
-    --surface-2:   #1a1f27;
-    --surface-3:   #222831;
-    --border:      #232a33;
-    --border-2:    #2f3947;
-    --text:        #e7eaef;
-    --text-2:      #9aa4b2;
-    --text-3:      #69727f;
-    --accent:      #5b8cff;
-    --accent-ink:  #0a0c10;
-    --accent-weak: #15233f;
-    --term-bg:     #07090c;
-    --term-text:   #cdd3db;
+    --bg:          #1a1517;
+    --bg-grid:     #1f191c;
+    --surface:     #231c1f;
+    --surface-2:   #2d2428;
+    --surface-3:   #362b30;
+    --border:      #33292d;
+    --border-2:    #45373c;
+    --text:        #f1e6e8;
+    --text-2:      #c2b1b5;
+    --text-3:      #a08f93;
+    --accent:      #e8a3ad;
+    --accent-ink:  #1a1517;
+    --accent-weak: #3a252a;
+    --term-bg:     #120e10;
+    --term-text:   #e2d5d8;
 
-    --ok:    #4ade80;   --ok-bg:    #11271b;   --ok-bd:    #1f4d33;
-    --warn:  #f5b860;   --warn-bg:  #2a1f0e;   --warn-bd:  #5a4115;
-    --err:   #f87171;   --err-bg:   #2a1313;   --err-bd:   #5a2424;
-    --mut:   #9aa4b2;   --mut-bg:   #1a1f27;   --mut-bd:   #2c343f;
+    --ok:    #9fceb0;   --ok-bg:    #1c2a22;   --ok-bd:    #2f4a3a;
+    --warn:  #e9c38a;   --warn-bg:  #2c2418;   --warn-bd:  #54432a;
+    --err:   #f08a8a;   --err-bg:   #311a1c;   --err-bd:   #5c2d31;
+    --mut:   #b3a1a5;   --mut-bg:   #2d2428;   --mut-bd:   #45373c;
   }
 
   * { -webkit-font-smoothing: antialiased; }
@@ -100,6 +100,7 @@
     padding: .5rem .7rem; transition: .14s; outline: none;
   }
   .field:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-weak); }
+  .field::placeholder { color: var(--text-3); }
 
   /* 狀態徽章 */
   .badge {

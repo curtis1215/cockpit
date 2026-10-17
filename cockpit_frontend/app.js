@@ -685,11 +685,11 @@
   // 依符號上色（▶ 標題 / → 步驟 / ✓ 成功 / ✗ 失敗）
   function colorize(line) {
     const esc = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    if (/^✓/.test(line)) return `<span style="color:#4ade80;">${esc}</span>`;
-    if (/^✗/.test(line)) return `<span style="color:#f87171;">${esc}</span>`;
-    if (/^■/.test(line)) return `<span style="color:#9aa4b2;">${esc}</span>`;
-    if (/^▶/.test(line)) return `<span style="color:#7dd3fc;font-weight:600;">${esc}</span>`;
-    if (/^→/.test(line)) return `<span style="color:#c4b5fd;">${esc}</span>`;
+    if (/^✓/.test(line)) return `<span style="color:#a5d8bb;">${esc}</span>`;
+    if (/^✗/.test(line)) return `<span style="color:#f2a0a0;">${esc}</span>`;
+    if (/^■/.test(line)) return `<span style="color:#b3a1a5;">${esc}</span>`;
+    if (/^▶/.test(line)) return `<span style="color:#a9cbe8;font-weight:600;">${esc}</span>`;
+    if (/^→/.test(line)) return `<span style="color:#c9b3e6;">${esc}</span>`;
     return `<span style="opacity:.82;">${esc}</span>`;
   }
 
