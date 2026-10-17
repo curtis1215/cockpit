@@ -179,3 +179,17 @@ test("manage.html 下拉箭頭用新灰", () => {
 test("index.html 搜尋框 placeholder 用 --text-3", () => {
   assert.match(read("index.html"), /\.field::placeholder\s*\{\s*color:\s*var\(--text-3\);?\s*\}/);
 });
+
+const LIVE = ["index.html", "machine.html", "manage.html", "topology.html",
+  "app.js", "topo.js", "api-data.js", "manage.js", "trends.js", "groups.js", "topo-state.js"];
+const BANNED = ["2f63ff", "5b8cff", "0a0c10", "f5f6f8", "07090c", "8b93a0", "4ade80",
+  "f87171", "9aa4b2", "7dd3fc", "c4b5fd", "22304d", "2755a0"];
+for (const f of LIVE)
+  test(`${f} 不含舊色`, () => {
+    let src = read(f).toLowerCase();
+    if (f === "api-data.js") src = src.split("\n").filter((l) => !l.includes('id="api-err"')).join("\n");
+    for (const c of BANNED) {
+      assert.ok(!src.includes(`#${c}`), `${f} 仍有 #${c}`);
+      assert.ok(!src.includes(`%23${c}`), `${f} 仍有 %23${c}`);
+    }
+  });
