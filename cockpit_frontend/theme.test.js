@@ -147,3 +147,14 @@ test("色票解析器在 index.html 深色區塊抓到 --accent", () => {
 
 for (const f of ["machine.html", "manage.html", "topology.html"])
   test(`${f} 兩種模式色票為櫻色`, () => assertPalette(f));
+
+const TERM_LINE = ["#a5d8bb", "#f2a0a0", "#b3a1a5", "#a9cbe8", "#c9b3e6"]; // ✓ ✗ ■ ▶ →
+for (const f of ["app.js", "topo.js"])
+  test(`${f} 終端機行色為櫻色版`, () => {
+    const js = read(f).toLowerCase();
+    for (const c of TERM_LINE) assert.ok(js.includes(`color:${c}`), `${f} 缺 ${c}`);
+  });
+test("topo.js #sw-term 底色與字色", () => {
+  const js = read("topo.js").toLowerCase();
+  assert.match(js, /id="sw-term" style="background:#120e10; color:#e2d5d8;/);
+});
