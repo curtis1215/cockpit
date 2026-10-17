@@ -109,30 +109,37 @@ function block(html, selector) {
   throw new Error(`${selector} 區塊沒有對應的 }`);
 }
 
+// 擷取每個宣告到分號為止的完整值（trim、小寫）。非 hex、非法尾碼都留在值裡，不會被截掉。
 function vars(css) {
   const out = new Map();
-  const re = /(--[a-zA-Z0-9-]+)\s*:\s*(#[0-9a-fA-F]+)/g;
-  for (const m of css.matchAll(re)) out.set(m[1], m[2].toLowerCase());
+  const re = /(--[a-zA-Z0-9-]+)\s*:\s*([^;]*);/g;
+  for (const m of css.matchAll(re)) out.set(m[1], m[2].trim().toLowerCase());
   return out;
+}
+
+// 每頁每模式應有的名稱 = b00b95c 該區塊的變數。
+// index / manage 含 --term-*；machine / topology 沒有。單頁額外變數來自 PAGE_EXTRA。
+const PAGES_WITHOUT_TERM = new Set(["machine.html", "topology.html"]);
+
+function expectedTable(file, mode) {
+  const table = { ...PALETTE[mode], ...((PAGE_EXTRA[file] && PAGE_EXTRA[file][mode]) || {}) };
+  if (PAGES_WITHOUT_TERM.has(file)) {
+    delete table["--term-bg"];
+    delete table["--term-text"];
+  }
+  return table;
 }
 
 function assertPalette(file) {
   const html = read(file);
   for (const [selector, mode] of [[":root", "light"], ["html.dark", "dark"]]) {
-    const css = block(html, selector);
-    const found = vars(css);
-    const extra = (PAGE_EXTRA[file] && PAGE_EXTRA[file][mode]) || {};
-    const table = { ...PALETTE[mode], ...extra };
-    for (const m of css.matchAll(/(--[a-zA-Z0-9-]+)\s*:/g)) {
-      assert.ok(
-        Object.prototype.hasOwnProperty.call(table, m[1]),
-        `${file} ${mode} 未定義變數 ${m[1]}`,
-      );
-    }
-    for (const [name, value] of found) {
-      if (Object.prototype.hasOwnProperty.call(table, name)) {
-        assert.equal(value, table[name], `${file} ${mode} ${name}`);
-      }
+    const found = vars(block(html, selector));
+    const table = expectedTable(file, mode);
+    const want = Object.keys(table).sort();
+    const got = [...found.keys()].sort();
+    assert.deepEqual(got, want, `${file} ${mode} 變數集合應與 b00b95c 該區塊相同`);
+    for (const name of want) {
+      assert.equal(found.get(name), table[name], `${file} ${mode} ${name}`);
     }
   }
 }
@@ -148,11 +155,21 @@ test("色票解析器在 index.html 深色區塊抓到 --accent", () => {
 for (const f of ["machine.html", "manage.html", "topology.html"])
   test(`${f} 兩種模式色票為櫻色`, () => assertPalette(f));
 
-const TERM_LINE = ["#a5d8bb", "#f2a0a0", "#b3a1a5", "#a9cbe8", "#c9b3e6"]; // ✓ ✗ ■ ▶ →
+const TERM_PAIR = [
+  ["✓", "#a5d8bb"],
+  ["✗", "#f2a0a0"],
+  ["■", "#b3a1a5"],
+  ["▶", "#a9cbe8"],
+  ["→", "#c9b3e6"],
+];
 for (const f of ["app.js", "topo.js"])
   test(`${f} 終端機行色為櫻色版`, () => {
-    const js = read(f).toLowerCase();
-    for (const c of TERM_LINE) assert.ok(js.includes(`color:${c}`), `${f} 缺 ${c}`);
+    const js = read(f);
+    for (const [sym, hex] of TERM_PAIR) {
+      const line = js.split("\n").find((l) => l.includes(`/^${sym}/`));
+      assert.ok(line, `${f} 缺少 /^${sym}/ 分支`);
+      assert.match(line.toLowerCase(), new RegExp(`color:${hex}`), `${f} ${sym}`);
+    }
   });
 test("topo.js #sw-term 底色與字色", () => {
   const js = read("topo.js").toLowerCase();
