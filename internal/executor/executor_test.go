@@ -68,9 +68,30 @@ func TestTimeoutWithOrphanHoldingStdout(t *testing.T) {
 	}
 	var lines []string
 	start := time.Now()
+	timeout := 1 * time.Second
+	// 背景行程先印出自己的 PID（setsid 後 session/群組 ID 即此 PID），供確認已啟動並在 Cleanup 殺掉
+	var pgid string
+	t.Cleanup(func() {
+		if pgid != "" {
+			exec.Command("pkill", "-KILL", "-g", pgid).Run()
+		}
+	})
 	// setsid 讓背景行程脫離程序群組，卻仍繼承 stdout；超時後 killGroup 殺不到它
-	res := Run(context.Background(), "setsid sh -c 'sleep 30' & echo hi", "", 1*time.Second, func(l string) { lines = append(lines, l) })
-	if d := time.Since(start); d > 5*time.Second {
+	res := Run(context.Background(), "setsid sh -c 'echo started $$; sleep 5' & echo hi", "", timeout, func(l string) { lines = append(lines, l) })
+	d := time.Since(start)
+	for _, l := range lines {
+		if strings.HasPrefix(l, "started ") {
+			pgid = strings.TrimSpace(strings.TrimPrefix(l, "started "))
+		}
+	}
+	if pgid == "" {
+		t.Fatalf("背景行程未啟動或未寫入 stdout，lines=%q", lines)
+	}
+	// 未達 timeout 代表背景行程沒握住 pipe，此測試就沒測到超時路徑
+	if d < timeout {
+		t.Fatalf("未觸發超時（耗時 %v），背景行程可能沒有握住 pipe", d)
+	}
+	if d > 3*time.Second {
 		t.Fatalf("orphan holding stdout blocked Run for %v", d)
 	}
 	// shell 以 0 結束，但超時必須回報失敗，不能被誤判為 success
