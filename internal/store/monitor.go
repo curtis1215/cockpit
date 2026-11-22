@@ -300,33 +300,22 @@ var dsLevels = []struct {
 
 const retain1m = 2 * 3600
 
-// srcRetainSec：來源層級的保留秒數（1m 用 retain1m，其餘為 dsLevels 中 Dst==src 那層的 RetainSec）。
-func srcRetainSec(src string) int64 {
-	if src == "1m" {
-		return retain1m
-	}
-	for _, lv := range dsLevels {
-		if lv.Dst == src {
-			return lv.RetainSec
-		}
-	}
-	panic("downsample: unknown source level " + src) // dsLevels 是靜態表，這裡代表程式寫錯
-}
-
 // Downsample：把 src 聚合進 dst，依 bucket_start = (ts/BucketSec)*BucketSec 分組。冪等（INSERT OR REPLACE）。
-// 只重算 bucket_start >= lb 的桶，lb 為來源保留期起點之後的第一個桶邊界；更舊的桶來源可能已被 prune 掉一部分，
-// 重算會用殘缺資料覆蓋正確值。ts < now 保留，最新的未完結桶仍會持續更新（趨勢圖需要）。
+// 下限 lb 取每個 system 在 src 中實際存在的最早 ts，向上取整到桶邊界：prune 只在服務運行時執行，
+// 停機超過保留期時舊來源仍在 DB，不能用 now-保留期推算。最早那個桶可能已被 prune 切掉一部分，故不重算。
+// ts < now 保留，最新的未完結桶仍會持續更新（趨勢圖需要）。
 func (s *Store) Downsample(now int64) error {
 	for _, lv := range dsLevels {
-		// 先加 BucketSec 再整除：Go 的 / 對負數往 0 截斷，直接 +1 會把 now 較小時的第一個桶誤排除。
-		lb := (now - srcRetainSec(lv.Src) + lv.BucketSec) / lv.BucketSec * lv.BucketSec
+		B := lv.BucketSec
 		_, err := s.db.Exec(`
+			WITH lb AS (SELECT system_id, ((MIN(ts)+?-1)/?)*? AS lb FROM metrics WHERE type=? GROUP BY system_id)
 			INSERT OR REPLACE INTO metrics (system_id,type,ts,cpu,mem,disk,gpu,net_up,net_down,load,temp)
-			SELECT system_id, ?, (ts/?)*?,
-			  AVG(cpu), AVG(mem), AVG(disk), AVG(gpu), AVG(net_up), AVG(net_down), AVG(load), AVG(temp)
-			FROM metrics WHERE type=? AND ts < ? AND ts >= ?
-			GROUP BY system_id, ts/?`,
-			lv.Dst, lv.BucketSec, lv.BucketSec, lv.Src, now, lb, lv.BucketSec)
+			SELECT m.system_id, ?, (m.ts/?)*?,
+			  AVG(m.cpu), AVG(m.mem), AVG(m.disk), AVG(m.gpu), AVG(m.net_up), AVG(m.net_down), AVG(m.load), AVG(m.temp)
+			FROM metrics m JOIN lb ON lb.system_id=m.system_id
+			WHERE m.type=? AND m.ts<? AND m.ts>=lb.lb
+			GROUP BY m.system_id, m.ts/?`,
+			B, B, B, lv.Src, lv.Dst, B, B, lv.Src, now, B)
 		if err != nil {
 			return err
 		}

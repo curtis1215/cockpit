@@ -183,12 +183,29 @@ func TestDownsampleSkipsPartiallyPrunedBucket(t *testing.T) {
 	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < 450`); err != nil {
 		t.Fatal(err)
 	}
-	// now=9000 → 1m 來源保留 7200s，15m 桶 lb = ((9000-7200)/900+1)*900 = 2700，該桶 0 < 2700 不再重算
+	// now=9000 → 1m 最早仍存在的 ts=450，向上取整到 900 邊界得 lb=900，該桶 0 < 900 不再重算
 	if err := s.Downsample(9000); err != nil {
 		t.Fatal(err)
 	}
 	after, _ := s.QueryMetrics(id, "15m", 0)
 	if len(after) != 1 || *after[0].CPU != 17 {
 		t.Fatalf("15m recomputed from pruned sources: %+v", after)
+	}
+}
+
+func TestDownsampleCatchesUpAfterOutageLongerThanRetention(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 停機期間 prune 沒跑：15m 桶 [0,900) 的 15 筆 1m（cpu 10..24，平均 17）仍在 DB，從未降採樣。
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	// now=9000：最新一筆 1m（ts=840）已超過 1m 保留期 7200s，舊實作的 lb 會把這整桶跳過。
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("15m after outage: %+v", pts)
 	}
 }
