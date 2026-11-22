@@ -2,6 +2,7 @@ package executor
 
 import (
 	"context"
+	"os/exec"
 	"runtime"
 	"strings"
 	"testing"
@@ -55,5 +56,25 @@ func TestLongLineDoesNotHang(t *testing.T) {
 	}
 	if len(lines) != 1 || lines[0] != "■ 輸出單行超過 1MB，其餘輸出略過" {
 		t.Fatalf("lines=%q", lines)
+	}
+}
+func TestTimeoutWithOrphanHoldingStdout(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 setsid")
+	}
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("無 setsid")
+	}
+	var lines []string
+	start := time.Now()
+	// setsid 讓背景行程脫離程序群組，卻仍繼承 stdout；超時後 killGroup 殺不到它
+	Run(context.Background(), "setsid sh -c 'sleep 30' & echo hi", "", 1*time.Second, func(l string) { lines = append(lines, l) })
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("orphan holding stdout blocked Run for %v", d)
+	}
+	for _, l := range lines {
+		if strings.Contains(l, "1MB") {
+			t.Fatalf("超時不應回報單行超限: %q", lines)
+		}
 	}
 }

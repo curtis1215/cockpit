@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"os/exec"
 	"strings"
@@ -32,6 +33,8 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 		select {
 		case <-ctx.Done():
 			killGroup(c)
+			// 脫離群組的孤兒行程仍握著 pipe，關閉讀端才能讓卡住的 Scan/io.Copy 返回
+			stdout.Close()
 		case <-done:
 		}
 	}()
@@ -44,7 +47,8 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 		}
 	}
 	if sc.Err() != nil {
-		if onLine != nil {
+		// 超時關閉 pipe 也會讓 Scan 出錯，只有單行超限才提示
+		if onLine != nil && errors.Is(sc.Err(), bufio.ErrTooLong) {
 			onLine("■ 輸出單行超過 1MB，其餘輸出略過")
 		}
 		// Scanner 停讀後不排空 pipe，子程序會卡在寫入直到 timeout
