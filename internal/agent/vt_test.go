@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -288,6 +290,53 @@ func TestRunJobGivesUpFinalLogFlushButReportsResult(t *testing.T) {
 	}
 	if result["status"] != "success" {
 		t.Fatalf("result=%v, want success", result)
+	}
+}
+
+// TestRunJobAbortArrivingAfterExitIsNotAborted: 指令已正常結束，abort 輪詢的回應卻在 RunJob 收尾前才到，
+// 結果仍必須是 success 且不記中止 log（aborted 只能在指令結束後讀一次）。
+func TestRunJobAbortArrivingAfterExitIsNotAborted(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "polling")
+	var mu sync.Mutex
+	var logged []string
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logged = append(logged, body.Lines...)
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			// 指令等這個旗標出現才結束，確保 abort 輪詢已在執行中；回應延後到指令結束之後才送達。
+			os.WriteFile(flag, nil, 0o644)
+			time.Sleep(500 * time.Millisecond)
+			w.Write([]byte(`{"abort":true}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	shell := fmt.Sprintf("until [ -f '%s' ]; do sleep 0.01; done", flag)
+	a.RunJob(Job{ID: 12, ShellCmd: shell, CurrentCmd: "true"}, 5*time.Millisecond, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if result["status"] != "success" {
+		t.Fatalf("result=%v, want success", result)
+	}
+	for _, l := range logged {
+		if strings.Contains(l, "中止") {
+			t.Fatalf("logged=%q, 已正常完成的工作不該記中止 log", logged)
+		}
 	}
 }
 

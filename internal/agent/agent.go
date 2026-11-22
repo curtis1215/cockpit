@@ -455,7 +455,9 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 		logs.run(logStop)
 	}()
 	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
-	if aborted.Load() {
+	// 只讀一次：log 與結果必須一致，abort 若在此之後才到，就視為指令已正常完成。
+	wasAborted := aborted.Load()
+	if wasAborted {
 		logs.add("■ 已由使用者中止")
 	}
 	// 先停掉背景的 abort 輪詢與 log sender 並等它們結束：之後只剩這個 goroutine 打 API，
@@ -465,7 +467,7 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 	<-ctlDone
 	<-logDone
 	logs.finalFlush()
-	if aborted.Load() {
+	if wasAborted {
 		a.reportResult(job.ID, "aborted", res.ExitCode, "")
 		return
 	}
