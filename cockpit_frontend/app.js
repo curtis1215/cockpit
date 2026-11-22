@@ -818,7 +818,11 @@
       const jobId = jb.getAttribute("data-job");
       const cached = state.jobs.find((j) => j.id === jobId);
       if (cached) {
+        // 執行中但沒有串流（例如重新整理後）：列表 log 只是尾端快照，清空後 SSE 會從第一行重送完整 log
+        const resume = cached.status === "running" && !state.streams?.[cached.id];
+        if (resume) cached.log = [];
         state.activeJobId = cached.id; renderCurrentJob(cached); renderRecentJobs();
+        if (resume) streamJob(cached);
         // 若 job 已結束，重抓最新資料再更新顯示
         if (cached.status !== "running") {
           api(`/api/jobs/${encodeURIComponent(jobId)}`).then((raw) => {
