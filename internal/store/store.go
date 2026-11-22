@@ -713,8 +713,12 @@ func (s *Store) SetCheckRequested(machine string) error {
 	return err
 }
 
-// 單一 UPDATE 原子取走請求，避免 SELECT 與 UPDATE 之間被新請求吃掉或被重複取走。
+// 先唯讀查旗標，沒有請求就不碰寫入鎖；有請求才用條件式 UPDATE 原子取走，避免重複取走。
 func (s *Store) TakeCheckRequested(machine string) bool {
+	var flag int
+	if err := s.db.QueryRow(`SELECT check_requested FROM machine_state WHERE machine=?`, machine).Scan(&flag); err != nil || flag != 1 {
+		return false
+	}
 	r, err := s.db.Exec(`UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=? AND check_requested=1`, machine)
 	if err != nil {
 		return false
@@ -729,8 +733,12 @@ func (s *Store) SetUpgradeRequested(machine string) error {
 	return err
 }
 
-// 單一 UPDATE 原子取走請求，避免 SELECT 與 UPDATE 之間被新請求吃掉或被重複取走。
+// 先唯讀查旗標，沒有請求就不碰寫入鎖；有請求才用條件式 UPDATE 原子取走，避免重複取走。
 func (s *Store) TakeUpgradeRequested(machine string) bool {
+	var flag int
+	if err := s.db.QueryRow(`SELECT upgrade_requested FROM machine_state WHERE machine=?`, machine).Scan(&flag); err != nil || flag != 1 {
+		return false
+	}
 	r, err := s.db.Exec(`UPDATE machine_state SET upgrade_requested=0, updated_at=datetime('now') WHERE machine=? AND upgrade_requested=1`, machine)
 	if err != nil {
 		return false
