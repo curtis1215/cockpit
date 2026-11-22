@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -28,6 +29,35 @@ func TestReportVersionsOnce(t *testing.T) {
 	a.ReportVersions(10 * time.Second)
 	if atomic.LoadInt32(&reported) != 1 {
 		t.Fatalf("reported=%d", reported)
+	}
+}
+
+// TestReportVersionsIgnoresTruncationWarning: 版本指令輸出超長行時，超限警告不能被當成版本
+// （version_regex (\d+) 不應從「1MB」解析出 1）。
+func TestReportVersionsIgnoresTruncationWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 head/tr")
+	}
+	var mu sync.Mutex
+	var reports []map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/installs":
+			json.NewEncoder(w).Encode([]map[string]any{{"software": "cc", "current_cmd": `head -c 2000000 /dev/zero | tr '\0' a; echo`, "version_regex": `(\d+)`}})
+		case "/api/agent/report-versions":
+			var body []map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			reports = append(reports, body...)
+			mu.Unlock()
+			w.Write([]byte(`{"applied":1}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.ReportVersions(10 * time.Second)
+	if len(reports) != 1 || reports[0]["current_version"] != "" {
+		t.Fatalf("reports=%v, want current_version 空字串", reports)
 	}
 }
 

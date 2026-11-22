@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log"
 	"os/exec"
 	"strings"
 	"time"
@@ -47,9 +48,10 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 		}
 	}
 	if sc.Err() != nil {
-		// 超時關閉 pipe 也會讓 Scan 出錯，只有單行超限才提示
-		if onLine != nil && errors.Is(sc.Err(), bufio.ErrTooLong) {
-			onLine("■ 輸出單行超過 1MB，其餘輸出略過")
+		// 超時關閉 pipe 也會讓 Scan 出錯，只有單行超限才記錄
+		// 警告不走 onLine：onLine 也用於版本偵測，警告文字會被誤解析成版本
+		if errors.Is(sc.Err(), bufio.ErrTooLong) {
+			log.Printf("executor: 輸出單行超過 1MB，其餘輸出略過")
 		}
 		// Scanner 停讀後不排空 pipe，子程序會卡在寫入直到 timeout
 		io.Copy(io.Discard, stdout)

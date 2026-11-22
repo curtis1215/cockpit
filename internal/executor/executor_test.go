@@ -54,8 +54,9 @@ func TestLongLineDoesNotHang(t *testing.T) {
 	if d := time.Since(start); d > 3*time.Second || res.ExitCode != 0 {
 		t.Fatalf("long line: took %v exit=%d", d, res.ExitCode)
 	}
-	if len(lines) != 1 || lines[0] != "■ 輸出單行超過 1MB，其餘輸出略過" {
-		t.Fatalf("lines=%q", lines)
+	// 警告走 agent log，不經 onLine：onLine 也用於版本偵測，警告文字會被誤解析
+	if len(lines) != 0 {
+		t.Fatalf("超長行警告不應經 onLine: %q", lines)
 	}
 }
 func TestTimeoutWithOrphanHoldingStdout(t *testing.T) {
