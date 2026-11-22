@@ -451,6 +451,21 @@ func TestLogBatcherCapsBuffer(t *testing.T) {
 	}
 }
 
+// TestLogBatcherTrimReleasesDroppedLines: 被丟掉的行不能仍被底層陣列參照，否則字串無法被 GC 回收。
+func TestLogBatcherTrimReleasesDroppedLines(t *testing.T) {
+	b := &logBatcher{send: func([]string) error { return nil }}
+	b.buf = make([]string, 0, 2) // 預先配置容量，讓後續 add 不換底層陣列
+	b.add(strings.Repeat("a", logBufMaxBytes/2))
+	backing := b.buf[:1]                           // 與 b.buf 共用底層陣列，用來檢查被丟掉的那一格
+	b.add(strings.Repeat("b", logBufMaxBytes/2+1)) // 合計超過位元組上限，丟掉第一行
+	if len(b.buf) != 1 || b.buf[0][0] != 'b' {
+		t.Fatalf("buf 應只剩最新一行，got len=%d", len(b.buf))
+	}
+	if backing[0] != "" {
+		t.Fatalf("被丟掉的行仍被底層陣列參照（長度 %d），GC 無法回收", len(backing[0]))
+	}
+}
+
 // TestLogBatcherCapsBytesAndSplitsPosts: 10 行 × 0.5MB 超過 logBufMaxBytes(4MiB)，只留最新 8 行；
 // 每次 POST 位元組數都不超過 logPostMaxBytes(1MiB)。
 func TestLogBatcherCapsBytesAndSplitsPosts(t *testing.T) {

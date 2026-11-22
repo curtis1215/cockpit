@@ -415,6 +415,7 @@ func (b *logBatcher) trimLocked() {
 		b.bufBytes -= len(b.buf[drop])
 		drop++
 	}
+	clear(b.buf[:drop]) // 底層陣列仍會參照被丟的字串，不清掉 GC 就無法回收
 	b.buf = b.buf[drop:]
 }
 
