@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -51,19 +52,19 @@ func Open(path string) (*Store, error) {
 	// doesn't exist yet (production DBs created before this change won't have it).
 	// SQLite errors with "duplicate column name" if it already exists — ignore that.
 	if _, err := db.Exec(`ALTER TABLE machine_state ADD COLUMN upgrade_requested INTEGER NOT NULL DEFAULT 0`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
 	// Defensive migration: add machine_uuid to systems.
 	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN machine_uuid TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
 	// Defensive migration: add grp to systems.
 	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN grp TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
@@ -73,7 +74,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE versions ADD COLUMN translate_error TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE versions ADD COLUMN translate_updated_at TEXT NOT NULL DEFAULT ''`,
 	} {
-		if _, err := db.Exec(q); err != nil && !contains(err.Error(), "duplicate column name") {
+		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
@@ -254,16 +255,7 @@ func isUniqueErr(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return contains(s, "UNIQUE constraint failed") || contains(s, "unique constraint")
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, "UNIQUE constraint failed") || strings.Contains(s, "unique constraint")
 }
 
 // SystemByEnrollToken looks up a system by its enroll token.

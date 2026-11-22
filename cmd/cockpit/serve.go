@@ -45,29 +45,27 @@ func runServe(args []string) {
 	// 用 srv.Inventory()（熱載後快照）而非啟動時的 inv——否則 UI 後加的軟體永遠不會被刷新。
 	refresh := func() { collector.RefreshUpstream(st, srv.Inventory(), collector.DefaultFetch, tr.ChangelogResult) }
 	srv.OnCheck(refresh)
-	if true { // 排程恆啟動：軟體可能於執行期經 UI 加入
-
-		hours := cfg.CheckHours
-		if hours <= 0 {
-			hours = 24
-		}
-		go func() {
-			for {
-				refresh()
-				// 通知所有 agent 重新回報版本（與 handleCheck 相同邏輯）
-				inv2 := srv.Inventory()
-				for name := range inv2.Machines {
-					st.SetCheckRequested(name)
-				}
-				if systems, err := st.ListSystems(); err == nil {
-					for _, sys := range systems {
-						st.SetCheckRequested(sys.Label)
-					}
-				}
-				time.Sleep(time.Duration(hours) * time.Hour)
-			}
-		}()
+	// 排程恆啟動：軟體可能於執行期經 UI 加入
+	hours := cfg.CheckHours
+	if hours <= 0 {
+		hours = 24
 	}
+	go func() {
+		for {
+			refresh()
+			// 通知所有 agent 重新回報版本（與 handleCheck 相同邏輯）
+			inv2 := srv.Inventory()
+			for name := range inv2.Machines {
+				st.SetCheckRequested(name)
+			}
+			if systems, err := st.ListSystems(); err == nil {
+				for _, sys := range systems {
+					st.SetCheckRequested(sys.Label)
+				}
+			}
+			time.Sleep(time.Duration(hours) * time.Hour)
+		}
+	}()
 
 	// 孤兒 job reaper：agent 執行中每 2 秒打一次 control，失聯 3 分鐘即可
 	// 安全判定 job 已死（claim 給斷線的連線、agent 中斷等），自動標 failed，
