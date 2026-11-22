@@ -4,11 +4,34 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/curtis1215/cockpit/internal/store"
 )
 
 func fpt(v float64) *float64 { return &v }
+
+// agentSystem 讀 inventory 必須經過 invMu，與 setInv 的寫鎖互斥。
+func TestAgentSystemWaitsForInventoryLock(t *testing.T) {
+	srv, _ := vtServer(t)
+	r := httptest.NewRequest("POST", "/api/agent/report-metrics", nil)
+	r.Header.Set("Authorization", "Bearer tok-unknown")
+
+	srv.invMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		srv.agentSystem(r)
+		close(done)
+	}()
+	select {
+	case <-done:
+		srv.invMu.Unlock()
+		t.Fatal("invMu 被持有時 agentSystem 已讀取 inventory（未加鎖）")
+	case <-time.After(200 * time.Millisecond):
+	}
+	srv.invMu.Unlock()
+	<-done
+}
 
 func TestSystemsEnrichedAndStatus(t *testing.T) {
 	srv, st := vtServer(t)
