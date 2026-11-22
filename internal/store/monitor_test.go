@@ -263,6 +263,28 @@ func TestPruneWatermarkNeverMovesBack(t *testing.T) {
 	}
 }
 
+func TestPruneRollsBackDeleteWhenWatermarkWriteFails(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	// 讓水位寫入失敗：寫 metrics_prune_wm:* 一律 ABORT
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_wm BEFORE INSERT ON settings
+		WHEN NEW.key LIKE 'metrics_prune_wm:%'
+		BEGIN SELECT RAISE(ABORT, 'watermark write failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	// 本來會刪 ts < 450 的列；水位寫失敗時刪除也必須回滾，否則下次 Downsample 會用殘缺來源重算
+	if err := s.PruneMetrics(7650); err == nil {
+		t.Fatal("PruneMetrics: want error when watermark write fails")
+	}
+	pts, _ := s.QueryMetrics(id, "1m", 0)
+	if len(pts) != 15 {
+		t.Fatalf("1m rows after failed prune: %d, want 15 (delete must roll back with watermark)", len(pts))
+	}
+}
+
 func TestDownsampleDoesNotRecomputePrePruneBucketWithoutWatermark(t *testing.T) {
 	s := mOpen(t)
 	id, _ := s.EnsureSystemForMachine("mac")

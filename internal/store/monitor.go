@@ -375,15 +375,23 @@ func (s *Store) PruneMetrics(now int64) error {
 }
 
 // pruneType 刪 typ 中 ts < cutoff 的列，並把 cutoff 寫入水位 key。水位只增不減，舊的較小 cutoff 不能把它往回拉。
+// 刪除與水位必須同一 transaction：只刪成功、水位寫失敗時，下次 Downsample 會把殘缺來源當完整資料重算。
 func (s *Store) pruneType(typ string, cutoff int64) error {
-	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, typ, cutoff); err != nil {
+	tx, err := s.db.Begin()
+	if err != nil {
 		return err
 	}
-	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, typ, cutoff); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value
 		WHERE CAST(excluded.value AS INTEGER) > CAST(settings.value AS INTEGER)`,
-		"metrics_prune_wm:"+typ, strconv.FormatInt(cutoff, 10))
-	return err
+		"metrics_prune_wm:"+typ, strconv.FormatInt(cutoff, 10)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // TouchSystem updates last_seen and sets status=online for a system.
