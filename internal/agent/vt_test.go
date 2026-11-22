@@ -1,16 +1,20 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/curtis1215/cockpit/internal/executor"
 )
 
 func TestReportVersionsOnce(t *testing.T) {
@@ -224,6 +228,29 @@ func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
 	}
 }
 
+// TestLogBatcherAddDoesNotWaitForSlowPost: /log 每次慢 300ms 時，指令執行不能被拖住。
+// 舊版在 add 內同步 POST（每 50 行一次），500 行 = 10 次 × 300ms ≈ 3s。
+func TestLogBatcherAddDoesNotWaitForSlowPost(t *testing.T) {
+	var mu sync.Mutex
+	var got []string
+	logs := &logBatcher{send: func(lines []string) error {
+		time.Sleep(300 * time.Millisecond)
+		mu.Lock()
+		got = append(got, lines...)
+		mu.Unlock()
+		return nil
+	}}
+	start := time.Now()
+	executor.Run(context.Background(), "for i in $(seq 1 500); do echo line$i; done", "", 10*time.Second, logs.add)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("executor.Run 被慢速 POST 拖住: %v", d)
+	}
+	logs.flush()
+	if len(got) != 500 || got[0] != "line1" || got[499] != "line500" {
+		t.Fatalf("got %d lines, first=%q", len(got), got[0])
+	}
+}
+
 // TestLogBatcherCapsBuffer: 持續送不出去時緩衝上限 logBufMax，超過丟最舊的。
 func TestLogBatcherCapsBuffer(t *testing.T) {
 	var sent []string
@@ -242,5 +269,34 @@ func TestLogBatcherCapsBuffer(t *testing.T) {
 	b.flush()
 	if len(sent) != logBufMax || sent[0] != "line2" || sent[len(sent)-1] != fmt.Sprintf("line%d", logBufMax+1) {
 		t.Fatalf("sent %d lines, first=%q last=%q", len(sent), sent[0], sent[len(sent)-1])
+	}
+}
+
+// TestLogBatcherCapsBytesAndSplitsPosts: 10 行 × 0.5MB 超過 logBufMaxBytes(4MiB)，只留最新 8 行；
+// 每次 POST 位元組數都不超過 logPostMaxBytes(1MiB)。
+func TestLogBatcherCapsBytesAndSplitsPosts(t *testing.T) {
+	var posts []int
+	var sent []string
+	b := &logBatcher{send: func(lines []string) error {
+		n := 0
+		for _, l := range lines {
+			n += len(l)
+		}
+		posts = append(posts, n)
+		sent = append(sent, lines...)
+		return nil
+	}}
+	body := strings.Repeat("x", 500_000)
+	for i := 1; i <= 10; i++ {
+		b.add(fmt.Sprintf("%d:%s", i, body))
+	}
+	b.flush()
+	for _, n := range posts {
+		if n > logPostMaxBytes {
+			t.Fatalf("POST %d bytes, want <= %d", n, logPostMaxBytes)
+		}
+	}
+	if len(sent) != 8 || !strings.HasPrefix(sent[0], "3:") {
+		t.Fatalf("kept %d lines (want 8), first prefix %.5q (want \"3:\")", len(sent), sent[0])
 	}
 }

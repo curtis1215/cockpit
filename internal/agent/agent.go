@@ -307,46 +307,95 @@ func (a *Agent) ReportVersions(execTimeout time.Duration) {
 }
 
 const (
-	logBatchSize = 50   // 緩衝剛好達到這個行數就立刻送
-	logBufMax    = 5000 // shortcut: 持續送不出去時最多暫存 5000 行、超過丟最舊的，要完整保留就改成落地暫存檔
+	logBatchSize    = 50      // 緩衝剛好達到這個行數就喚醒背景 sender（非阻塞，add 本身不送）
+	logBufMax       = 5000    // shortcut: 送不出去時最多暫存 5000 行且總計 4MiB，超過丟最舊的；要完整保留就改成落地暫存檔
+	logBufMaxBytes  = 4 << 20 // 5000 行 × 近 1MiB 會占用數 GiB，所以另設位元組上限
+	logPostMaxBytes = 1 << 20 // 單次 POST 的位元組上限，超過就分批送
 )
 
 // logBatcher 把 job log 攢成批次送出，避免每行一次 HTTP 拖慢指令輸出。
+// bufMu 只保護 buf，add 在鎖內 append 後立即返回、絕不做網路 I/O；
+// sendMu 保證同一時間只有一個 sender，行序不亂。
 type logBatcher struct {
-	mu   sync.Mutex
-	buf  []string
-	send func([]string) error
+	bufMu    sync.Mutex
+	buf      []string
+	bufBytes int
+	sendMu   sync.Mutex
+	kick     chan struct{} // 容量 1，達 logBatchSize 時非阻塞通知 run 送出
+	send     func([]string) error
 }
 
 func (b *logBatcher) add(line string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+	b.bufMu.Lock()
+	defer b.bufMu.Unlock()
 	b.buf = append(b.buf, line)
-	if len(b.buf) > logBufMax {
-		b.buf = b.buf[len(b.buf)-logBufMax:]
-	}
+	b.bufBytes += len(line)
+	b.trimLocked()
 	// == 而非 >=：送失敗回補後不重複觸發，server 掛掉時不會每行都打一次 HTTP
 	if len(b.buf) == logBatchSize {
-		b.flushLocked()
+		select {
+		case b.kick <- struct{}{}:
+		default:
+		}
 	}
 }
 
+// run 背景送出：每秒一次，或被 add 喚醒時送出；stop 關閉後返回。
+func (b *logBatcher) run(stop <-chan struct{}) {
+	tk := time.NewTicker(time.Second)
+	defer tk.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tk.C:
+		case <-b.kick:
+		}
+		b.flush()
+	}
+}
+
+// flush 把整個緩衝分批送出（每次 POST ≤ logPostMaxBytes）；失敗就把未送出的行放回最前面，下次再送。
 func (b *logBatcher) flush() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.flushLocked()
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+	b.bufMu.Lock()
+	pending := b.buf
+	b.buf, b.bufBytes = nil, 0
+	b.bufMu.Unlock()
+	for len(pending) > 0 {
+		n, size := 0, 0
+		for n < len(pending) && (n == 0 || size+len(pending[n]) <= logPostMaxBytes) {
+			size += len(pending[n])
+			n++
+		}
+		if b.send(pending[:n]) != nil {
+			b.requeue(pending)
+			return
+		}
+		pending = pending[n:]
+	}
 }
 
-// flushLocked 送出整個緩衝；失敗就把整批放回最前面，下次再送。呼叫端須持有 mu。
-func (b *logBatcher) flushLocked() {
-	if len(b.buf) == 0 {
-		return
+// requeue 把未送出的行放回緩衝最前面，超過上限就丟最舊的。
+func (b *logBatcher) requeue(lines []string) {
+	b.bufMu.Lock()
+	defer b.bufMu.Unlock()
+	for _, l := range lines {
+		b.bufBytes += len(l)
 	}
-	batch := b.buf
-	b.buf = nil
-	if b.send(batch) != nil {
-		b.buf = batch
+	b.buf = append(append([]string(nil), lines...), b.buf...)
+	b.trimLocked()
+}
+
+// trimLocked 超過行數或位元組上限就從最舊的行開始丟。呼叫端須持有 bufMu。
+func (b *logBatcher) trimLocked() {
+	drop := 0
+	for drop < len(b.buf) && (len(b.buf)-drop > logBufMax || b.bufBytes > logBufMaxBytes) {
+		b.bufBytes -= len(b.buf[drop])
+		drop++
 	}
+	b.buf = b.buf[drop:]
 }
 
 // RunJob 執行 server 渲染好的指令：串流 log、輪詢 abort、成功後驗證新版本、回報結果。
@@ -375,22 +424,11 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 			}
 		}
 	}()
-	logs := &logBatcher{send: func(lines []string) error {
+	logs := &logBatcher{kick: make(chan struct{}, 1), send: func(lines []string) error {
 		_, err := a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": lines}, nil)
 		return err
 	}}
-	go func() {
-		tk := time.NewTicker(time.Second)
-		defer tk.Stop()
-		for {
-			select {
-			case <-stop:
-				return
-			case <-tk.C:
-				logs.flush()
-			}
-		}
-	}()
+	go logs.run(stop)
 	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
 	if aborted.Load() {
 		logs.add("■ 已由使用者中止")
