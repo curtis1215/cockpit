@@ -256,3 +256,32 @@ func TestSSEEndsOnDone(t *testing.T) {
 		t.Fatalf("sse: %s", b)
 	}
 }
+
+func TestJobsListTrimsLogTo200Lines(t *testing.T) {
+	srv, st := vtServer(t)
+	long, _ := st.CreateJobUnique("cc", "mac", "command", "")
+	for i := 1; i <= 300; i++ {
+		st.AppendJobLog(long, "line"+strconv.Itoa(i))
+	}
+	st.FinishJob(long, "success", 0, "")
+	short, _ := st.CreateJobUnique("cc", "mac", "command", "")
+	st.AppendJobLog(short, "only A")
+	st.AppendJobLog(short, "only B")
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/jobs", nil))
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	logs := map[float64]string{}
+	for _, j := range list {
+		logs[j["id"].(float64)] = j["log"].(string)
+	}
+	if got := logs[float64(long)]; strings.Count(got, "\n") != 200 || !strings.HasPrefix(got, "line101\n") || !strings.HasSuffix(got, "line300\n") {
+		t.Fatalf("long job log: %d newlines, want 200 lines from line101 to line300", strings.Count(got, "\n"))
+	}
+	if got := logs[float64(short)]; got != "only A\nonly B\n" {
+		t.Fatalf("short job log changed: %q", got)
+	}
+}
