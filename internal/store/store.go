@@ -39,16 +39,9 @@ type System struct {
 type Store struct{ db *sql.DB }
 
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// PRAGMA 是逐條連線生效，用 _pragma 參數讓連線池的每條連線都套用。
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return nil, err
-	}
-	// 預設 busy_timeout=0 會讓並發讀寫（refresh goroutine vs WebUI 設定寫入）
-	// 立刻撞 SQLITE_BUSY；給 5s 等待避免瞬時鎖競爭直接變成錯誤。
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
