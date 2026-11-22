@@ -42,3 +42,18 @@ func TestTimeout(t *testing.T) {
 		t.Fatalf("timeout: %v %d", time.Since(start), res.ExitCode)
 	}
 }
+func TestLongLineDoesNotHang(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 head/tr/seq，且 group-kill 屬實驗性")
+	}
+	var lines []string
+	cmd := `head -c 2000000 /dev/zero | tr '\0' a; echo; for i in $(seq 1 2000); do echo xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx; done`
+	start := time.Now()
+	res := Run(context.Background(), cmd, "", 10*time.Second, func(l string) { lines = append(lines, l) })
+	if d := time.Since(start); d > 3*time.Second || res.ExitCode != 0 {
+		t.Fatalf("long line: took %v exit=%d", d, res.ExitCode)
+	}
+	if len(lines) != 1 || lines[0] != "■ 輸出單行超過 1MB，其餘輸出略過" {
+		t.Fatalf("lines=%q", lines)
+	}
+}

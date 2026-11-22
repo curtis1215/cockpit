@@ -3,6 +3,7 @@ package executor
 import (
 	"bufio"
 	"context"
+	"io"
 	"os/exec"
 	"strings"
 	"time"
@@ -41,6 +42,13 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 		if onLine != nil {
 			onLine(line)
 		}
+	}
+	if sc.Err() != nil {
+		if onLine != nil {
+			onLine("■ 輸出單行超過 1MB，其餘輸出略過")
+		}
+		// Scanner 停讀後不排空 pipe，子程序會卡在寫入直到 timeout
+		io.Copy(io.Discard, stdout)
 	}
 	err = c.Wait()
 	close(done)
