@@ -142,16 +142,18 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 }
 
 // tailLines 保留 s 的最後 n 行；結尾有換行就維持有換行。
+// 反向掃描、回傳子字串：不 Split 整份 log，log 沒有長度上限。n 須大於 0。
 func tailLines(s string, n int) string {
-	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
-	if len(lines) <= n {
-		return s
+	body := strings.TrimSuffix(s, "\n")
+	start := len(body)
+	for i := 0; i < n; i++ {
+		j := strings.LastIndexByte(body[:start], '\n')
+		if j < 0 {
+			return s
+		}
+		start = j
 	}
-	tail := strings.Join(lines[len(lines)-n:], "\n")
-	if strings.HasSuffix(s, "\n") {
-		tail += "\n"
-	}
-	return tail
+	return s[start+1:]
 }
 
 func jobMap(j store.Job) map[string]any {

@@ -285,3 +285,32 @@ func TestJobsListTrimsLogTo200Lines(t *testing.T) {
 		t.Fatalf("short job log changed: %q", got)
 	}
 }
+
+func TestTailLines(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"empty", "", ""},
+		{"exactly n lines, no trailing newline", "a\nb\nc", "a\nb\nc"},
+		{"exactly n lines, trailing newline", "a\nb\nc\n", "a\nb\nc\n"},
+		{"n+1 lines, no trailing newline", "a\nb\nc\nd", "b\nc\nd"},
+		{"n+1 lines, trailing newline", "a\nb\nc\nd\n", "b\nc\nd\n"},
+		{"fewer than n lines", "x\n", "x\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := tailLines(c.in, 3); got != c.want {
+				t.Fatalf("tailLines(%q, 3) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTailLinesDoesNotAllocate(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 300; i++ {
+		b.WriteString("line" + strconv.Itoa(i) + "\n")
+	}
+	s := b.String()
+	if allocs := testing.AllocsPerRun(10, func() { _ = tailLines(s, 200) }); allocs != 0 {
+		t.Fatalf("tailLines allocs per run = %v, want 0", allocs)
+	}
+}
