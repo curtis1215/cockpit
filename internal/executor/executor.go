@@ -58,6 +58,10 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 	}
 	err = c.Wait()
 	close(done)
+	// 脫離群組的孤兒行程可能讓 shell 以 0 結束，超時一律視為失敗
+	if ctx.Err() == context.DeadlineExceeded {
+		return Result{ExitCode: -1}
+	}
 	return Result{ExitCode: exitCode(err)}
 }
 

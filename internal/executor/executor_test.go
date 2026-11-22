@@ -69,9 +69,13 @@ func TestTimeoutWithOrphanHoldingStdout(t *testing.T) {
 	var lines []string
 	start := time.Now()
 	// setsid 讓背景行程脫離程序群組，卻仍繼承 stdout；超時後 killGroup 殺不到它
-	Run(context.Background(), "setsid sh -c 'sleep 30' & echo hi", "", 1*time.Second, func(l string) { lines = append(lines, l) })
+	res := Run(context.Background(), "setsid sh -c 'sleep 30' & echo hi", "", 1*time.Second, func(l string) { lines = append(lines, l) })
 	if d := time.Since(start); d > 5*time.Second {
 		t.Fatalf("orphan holding stdout blocked Run for %v", d)
+	}
+	// shell 以 0 結束，但超時必須回報失敗，不能被誤判為 success
+	if res.ExitCode != -1 {
+		t.Fatalf("超時應回報 ExitCode -1，實際 %d", res.ExitCode)
 	}
 	for _, l := range lines {
 		if strings.Contains(l, "1MB") {
