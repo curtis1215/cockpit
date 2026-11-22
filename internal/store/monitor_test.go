@@ -164,3 +164,219 @@ func TestDownsampleAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDownsampleSkipsPartiallyPrunedBucket(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 15m 桶 [0,900)：完整 15 筆 1m（ts 0..840，cpu 10..24，平均 17）
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.QueryMetrics(id, "15m", 0)
+	if len(before) != 1 || *before[0].CPU != 17 {
+		t.Fatalf("15m before prune: %+v", before)
+	}
+	// 真實 prune：now=7650 → 1m cutoff=450，刪掉該桶前半段（ts < 450）並記下水位 450
+	if err := s.PruneMetrics(7650); err != nil {
+		t.Fatal(err)
+	}
+	// now=9000：水位 450 向上取整到 900 邊界得 lb=900，該桶 0 < 900 不再重算
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.QueryMetrics(id, "15m", 0)
+	if len(after) != 1 || *after[0].CPU != 17 {
+		t.Fatalf("15m recomputed from pruned sources: %+v", after)
+	}
+}
+
+func TestDownsampleCatchesUpWithinRetentionWithoutWatermark(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 無水位、從未聚合：15m 桶 [1800,2700) 的 15 筆 1m（cpu 10..24，平均 17）皆在 now-retain1m(=1800) 之後，應補算。
+	// 保留期之前未聚合的來源不補算（見 Downsample 註解）。
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(1800 + 60*i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("15m not caught up: %+v", pts)
+	}
+}
+
+func TestDownsampleAggregatesFirstBucketWhenNotOnBoundary(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 從未 prune，第一筆 ts=60 不在 900 邊界上：[0,900) 桶仍須聚合（ts 60..840，cpu 11..24，平均 17.5）
+	for i := 1; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17.5 {
+		t.Fatalf("first bucket not aggregated: %+v", pts)
+	}
+}
+
+func TestDownsampleKeepsPartiallyPrunedBucketAfterLateSample(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	// 真實 prune 到水位 450（刪 ts < 450），再補一筆比水位更舊的遲到樣本 ts=0
+	if err := s.PruneMetrics(7650); err != nil {
+		t.Fatal(err)
+	}
+	s.InsertMetric(id, "1m", MetricRow{TS: 0, CPU: f(100), Mem: f(50)})
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	// 舊實作 MIN(ts)=0 會把部分 prune 的 [0,900) 桶用殘缺資料重算；水位 450 須保住原值 17
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("partially pruned bucket recomputed: %+v", pts)
+	}
+}
+
+func TestPruneWatermarkNeverMovesBack(t *testing.T) {
+	s := mOpen(t)
+	if err := s.PruneMetrics(7650); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneMetrics(7000); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetSetting("metrics_prune_wm:1m"); got != "450" {
+		t.Fatalf("watermark moved back: %q", got)
+	}
+}
+
+func TestPruneRollsBackDeleteWhenWatermarkWriteFails(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	// 讓水位寫入失敗：寫 metrics_prune_wm:* 一律 ABORT
+	if _, err := s.db.Exec(`CREATE TRIGGER fail_wm BEFORE INSERT ON settings
+		WHEN NEW.key LIKE 'metrics_prune_wm:%'
+		BEGIN SELECT RAISE(ABORT, 'watermark write failed'); END`); err != nil {
+		t.Fatal(err)
+	}
+	// 本來會刪 ts < 450 的列；水位寫失敗時刪除也必須回滾，否則下次 Downsample 會用殘缺來源重算
+	if err := s.PruneMetrics(7650); err == nil {
+		t.Fatal("PruneMetrics: want error when watermark write fails")
+	}
+	pts, _ := s.QueryMetrics(id, "1m", 0)
+	if len(pts) != 15 {
+		t.Fatalf("1m rows after failed prune: %d, want 15 (delete must roll back with watermark)", len(pts))
+	}
+}
+
+func TestDownsampleDoesNotRecomputePrePruneBucketWithoutWatermark(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	// 模擬升級前已 prune：刪掉 [0,900) 桶的前半段（ts < 450），但沒有寫入水位。
+	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < 450`); err != nil {
+		t.Fatal(err)
+	}
+	if wm := s.GetSetting("metrics_prune_wm:1m"); wm != "" {
+		t.Fatalf("precondition: unexpected watermark %q", wm)
+	}
+	// 無水位時保守下限 now-retain1m(=1800) 排除此桶；若退回「不設下限」，殘缺來源（ts 480..840，平均 21）會覆蓋 17
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("pre-prune bucket recomputed without watermark: %+v", pts)
+	}
+}
+
+func TestDownsampleWithoutWatermarkAggregatesSystemThatStartsLater(t *testing.T) {
+	s := mOpen(t)
+	a, _ := s.EnsureSystemForMachine("a")
+	b, _ := s.EnsureSystemForMachine("b")
+	// a 先回報，首筆 ts=60 不在桶邊界；第一次聚合後 15m 的 [0,900) 桶已存在
+	for i := 1; i < 15; i++ {
+		s.InsertMetric(a, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	// b 較晚才開始回報，首筆 ts=420 同樣不在邊界，且 [0,900) 桶尚未聚合過
+	for i := 7; i < 15; i++ {
+		s.InsertMetric(b, "1m", MetricRow{TS: int64(60 * i), CPU: f(40), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		id   string
+		want float64
+	}{{"a", a, 17.5}, {"b", b, 40}} {
+		pts, _ := s.QueryMetrics(tc.id, "15m", 0)
+		if len(pts) != 1 || *pts[0].CPU != tc.want {
+			t.Fatalf("system %s 15m: %+v, want %v", tc.name, pts, tc.want)
+		}
+	}
+}
+
+func TestDownsampleWithoutWatermarkRecomputesPartialFirstBucket(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 樣本都在 now-retain1m(=1800) 之後。首桶 [1800,2700) 先只有兩筆（cpu 10、12，平均 11）
+	s.InsertMetric(id, "1m", MetricRow{TS: 1860, CPU: f(10), Mem: f(50)})
+	s.InsertMetric(id, "1m", MetricRow{TS: 1920, CPU: f(12), Mem: f(50)})
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	// 同一桶之後又補進一筆（cpu 20），重跑聚合應更新為 (10+12+20)/3 = 14
+	s.InsertMetric(id, "1m", MetricRow{TS: 2100, CPU: f(20), Mem: f(50)})
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 14 {
+		t.Fatalf("partial first bucket not updated: %+v", pts)
+	}
+}
+
+func TestDownsampleIgnoresFutureWatermarkAfterClockRewind(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 伺服器時鐘曾快跳：水位寫在遠未來。時鐘校正後，正常時間的 1m 樣本不得被水位過濾掉。
+	if err := s.SetSetting("metrics_prune_wm:1m", "10000000"); err != nil {
+		t.Fatal(err)
+	}
+	// now=9000 的 1m 保留期內樣本 [1800,2700)，cpu 10..24，平均 17
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(1800 + 60*i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("15m bucket missing under future watermark: %+v", pts)
+	}
+}

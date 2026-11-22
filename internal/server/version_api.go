@@ -135,9 +135,25 @@ func (s *Server) handleJobs(w http.ResponseWriter, r *http.Request) {
 	list, _ := s.st.ListJobs(50)
 	out := []map[string]any{}
 	for _, j := range list {
+		j.Log = tailLines(j.Log, 200) // 列表只給尾端，完整 log 走 /api/jobs/{id}
 		out = append(out, jobMap(j))
 	}
 	writeJSON(w, 200, out)
+}
+
+// tailLines 保留 s 的最後 n 行；結尾有換行就維持有換行。
+// 反向掃描、回傳子字串：不 Split 整份 log，log 沒有長度上限。n 須大於 0。
+func tailLines(s string, n int) string {
+	body := strings.TrimSuffix(s, "\n")
+	start := len(body)
+	for i := 0; i < n; i++ {
+		j := strings.LastIndexByte(body[:start], '\n')
+		if j < 0 {
+			return s
+		}
+		start = j
+	}
+	return s[start+1:]
 }
 
 func jobMap(j store.Job) map[string]any {

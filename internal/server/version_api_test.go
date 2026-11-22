@@ -256,3 +256,61 @@ func TestSSEEndsOnDone(t *testing.T) {
 		t.Fatalf("sse: %s", b)
 	}
 }
+
+func TestJobsListTrimsLogTo200Lines(t *testing.T) {
+	srv, st := vtServer(t)
+	long, _ := st.CreateJobUnique("cc", "mac", "command", "")
+	for i := 1; i <= 300; i++ {
+		st.AppendJobLog(long, "line"+strconv.Itoa(i))
+	}
+	st.FinishJob(long, "success", 0, "")
+	short, _ := st.CreateJobUnique("cc", "mac", "command", "")
+	st.AppendJobLog(short, "only A")
+	st.AppendJobLog(short, "only B")
+
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, httptest.NewRequest("GET", "/api/jobs", nil))
+	var list []map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	logs := map[float64]string{}
+	for _, j := range list {
+		logs[j["id"].(float64)] = j["log"].(string)
+	}
+	if got := logs[float64(long)]; strings.Count(got, "\n") != 200 || !strings.HasPrefix(got, "line101\n") || !strings.HasSuffix(got, "line300\n") {
+		t.Fatalf("long job log: %d newlines, want 200 lines from line101 to line300", strings.Count(got, "\n"))
+	}
+	if got := logs[float64(short)]; got != "only A\nonly B\n" {
+		t.Fatalf("short job log changed: %q", got)
+	}
+}
+
+func TestTailLines(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"empty", "", ""},
+		{"exactly n lines, no trailing newline", "a\nb\nc", "a\nb\nc"},
+		{"exactly n lines, trailing newline", "a\nb\nc\n", "a\nb\nc\n"},
+		{"n+1 lines, no trailing newline", "a\nb\nc\nd", "b\nc\nd"},
+		{"n+1 lines, trailing newline", "a\nb\nc\nd\n", "b\nc\nd\n"},
+		{"fewer than n lines", "x\n", "x\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := tailLines(c.in, 3); got != c.want {
+				t.Fatalf("tailLines(%q, 3) = %q, want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTailLinesDoesNotAllocate(t *testing.T) {
+	var b strings.Builder
+	for i := 1; i <= 300; i++ {
+		b.WriteString("line" + strconv.Itoa(i) + "\n")
+	}
+	s := b.String()
+	if allocs := testing.AllocsPerRun(10, func() { _ = tailLines(s, 200) }); allocs != 0 {
+		t.Fatalf("tailLines allocs per run = %v, want 0", allocs)
+	}
+}

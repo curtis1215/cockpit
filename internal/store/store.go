@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -38,17 +40,33 @@ type System struct {
 
 type Store struct{ db *sql.DB }
 
+// sqliteDSN 把 db_path 轉成 modernc sqlite 的 DSN。
+func sqliteDSN(path string) string {
+	const pragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	if strings.HasPrefix(path, "file:") {
+		// 已是 SQLite URI，原樣保留，只接上 _pragma。
+		if strings.Contains(path, "?") {
+			return path + "&" + pragmas
+		}
+		return path + "?" + pragmas
+	}
+	// 路徑中的 % ? # 是 SQLite URI 語法，需先跳脫，否則檔名會被截斷或開到別的檔案。
+	esc := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
+	if !filepath.IsAbs(path) {
+		return "file:" + esc + "?" + pragmas
+	}
+	if !strings.HasPrefix(esc, "/") {
+		// Windows 磁碟路徑 C:\x → file:///C:/x
+		return "file:///" + filepath.ToSlash(esc) + "?" + pragmas
+	}
+	// file:// 後接 / 開頭的路徑，authority 為空；//tmp/x.db 會變成 file:////tmp/x.db，不會把 tmp 當成主機名。
+	return "file://" + esc + "?" + pragmas
+}
+
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	// PRAGMA 是逐條連線生效，_pragma 參數讓連線池的每條連線都套用（見 sqliteDSN）。
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		return nil, err
-	}
-	// 預設 busy_timeout=0 會讓並發讀寫（refresh goroutine vs WebUI 設定寫入）
-	// 立刻撞 SQLITE_BUSY；給 5s 等待避免瞬時鎖競爭直接變成錯誤。
-	if _, err := db.Exec("PRAGMA busy_timeout=5000"); err != nil {
 		return nil, err
 	}
 	if _, err := db.Exec(schema); err != nil {
@@ -58,19 +76,19 @@ func Open(path string) (*Store, error) {
 	// doesn't exist yet (production DBs created before this change won't have it).
 	// SQLite errors with "duplicate column name" if it already exists — ignore that.
 	if _, err := db.Exec(`ALTER TABLE machine_state ADD COLUMN upgrade_requested INTEGER NOT NULL DEFAULT 0`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
 	// Defensive migration: add machine_uuid to systems.
 	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN machine_uuid TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
 	// Defensive migration: add grp to systems.
 	if _, err := db.Exec(`ALTER TABLE systems ADD COLUMN grp TEXT NOT NULL DEFAULT ''`); err != nil {
-		if !contains(err.Error(), "duplicate column name") {
+		if !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
@@ -80,7 +98,7 @@ func Open(path string) (*Store, error) {
 		`ALTER TABLE versions ADD COLUMN translate_error TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE versions ADD COLUMN translate_updated_at TEXT NOT NULL DEFAULT ''`,
 	} {
-		if _, err := db.Exec(q); err != nil && !contains(err.Error(), "duplicate column name") {
+		if _, err := db.Exec(q); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
 			return nil, err
 		}
 	}
@@ -261,16 +279,7 @@ func isUniqueErr(err error) bool {
 		return false
 	}
 	s := err.Error()
-	return contains(s, "UNIQUE constraint failed") || contains(s, "unique constraint")
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, "UNIQUE constraint failed") || strings.Contains(s, "unique constraint")
 }
 
 // SystemByEnrollToken looks up a system by its enroll token.
@@ -587,18 +596,17 @@ func (s *Store) DeleteInstall(software, machine string) error {
 
 // CreateJobUnique creates a job only if no queued/running job exists for (software,machine).
 // Returns the new job ID, or 0 if a duplicate exists.
+// 檢查與插入必須在同一條語句內完成，否則並發請求會各自通過檢查而重複建立。
 func (s *Store) CreateJobUnique(software, machine, kind, runner string) (int64, error) {
-	var existing int
-	err := s.db.QueryRow(`SELECT 1 FROM jobs WHERE software=? AND machine=? AND status IN ('queued','running') LIMIT 1`, software, machine).Scan(&existing)
-	if err == nil {
-		return 0, nil
-	}
-	if err != sql.ErrNoRows {
-		return 0, err
-	}
-	res, err := s.db.Exec(`INSERT INTO jobs (software,machine,kind,runner) VALUES (?,?,?,?)`, software, machine, kind, nullStr(runner))
+	res, err := s.db.Exec(`INSERT INTO jobs (software,machine,kind,runner)
+		SELECT ?,?,?,? WHERE NOT EXISTS (
+		  SELECT 1 FROM jobs WHERE software=? AND machine=? AND status IN ('queued','running'))`,
+		software, machine, kind, nullStr(runner), software, machine)
 	if err != nil {
 		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, nil
 	}
 	return res.LastInsertId()
 }
@@ -727,14 +735,18 @@ func (s *Store) SetCheckRequested(machine string) error {
 	return err
 }
 
+// 先唯讀查旗標，沒有請求就不碰寫入鎖；有請求才用條件式 UPDATE 原子取走，避免重複取走。
 func (s *Store) TakeCheckRequested(machine string) bool {
-	var v int
-	s.db.QueryRow(`SELECT check_requested FROM machine_state WHERE machine=?`, machine).Scan(&v)
-	if v != 0 {
-		s.db.Exec(`UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=?`, machine)
-		return true
+	var flag int
+	if err := s.db.QueryRow(`SELECT check_requested FROM machine_state WHERE machine=?`, machine).Scan(&flag); err != nil || flag != 1 {
+		return false
 	}
-	return false
+	r, err := s.db.Exec(`UPDATE machine_state SET check_requested=0, updated_at=datetime('now') WHERE machine=? AND check_requested=1`, machine)
+	if err != nil {
+		return false
+	}
+	n, _ := r.RowsAffected()
+	return n == 1
 }
 
 func (s *Store) SetUpgradeRequested(machine string) error {
@@ -743,12 +755,16 @@ func (s *Store) SetUpgradeRequested(machine string) error {
 	return err
 }
 
+// 先唯讀查旗標，沒有請求就不碰寫入鎖；有請求才用條件式 UPDATE 原子取走，避免重複取走。
 func (s *Store) TakeUpgradeRequested(machine string) bool {
-	var v int
-	s.db.QueryRow(`SELECT upgrade_requested FROM machine_state WHERE machine=?`, machine).Scan(&v)
-	if v != 0 {
-		s.db.Exec(`UPDATE machine_state SET upgrade_requested=0, updated_at=datetime('now') WHERE machine=?`, machine)
-		return true
+	var flag int
+	if err := s.db.QueryRow(`SELECT upgrade_requested FROM machine_state WHERE machine=?`, machine).Scan(&flag); err != nil || flag != 1 {
+		return false
 	}
-	return false
+	r, err := s.db.Exec(`UPDATE machine_state SET upgrade_requested=0, updated_at=datetime('now') WHERE machine=? AND upgrade_requested=1`, machine)
+	if err != nil {
+		return false
+	}
+	n, _ := r.RowsAffected()
+	return n == 1
 }

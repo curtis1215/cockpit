@@ -2,8 +2,15 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,6 +32,35 @@ func TestReportVersionsOnce(t *testing.T) {
 	a.ReportVersions(10 * time.Second)
 	if atomic.LoadInt32(&reported) != 1 {
 		t.Fatalf("reported=%d", reported)
+	}
+}
+
+// TestReportVersionsIgnoresTruncationWarning: 版本指令輸出超長行時，超限警告不能被當成版本
+// （version_regex (\d+) 不應從「1MB」解析出 1）。
+func TestReportVersionsIgnoresTruncationWarning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 head/tr")
+	}
+	var mu sync.Mutex
+	var reports []map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/agent/installs":
+			json.NewEncoder(w).Encode([]map[string]any{{"software": "cc", "current_cmd": `head -c 2000000 /dev/zero | tr '\0' a; echo`, "version_regex": `(\d+)`}})
+		case "/api/agent/report-versions":
+			var body []map[string]string
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			reports = append(reports, body...)
+			mu.Unlock()
+			w.Write([]byte(`{"applied":1}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.ReportVersions(10 * time.Second)
+	if len(reports) != 1 || reports[0]["current_version"] != "" {
+		t.Fatalf("reports=%v, want current_version 空字串", reports)
 	}
 }
 
@@ -72,6 +108,49 @@ func TestRunJobFailure(t *testing.T) {
 	}
 }
 
+// TestRunJobReportsTruncationToJobLog: 指令輸出超過單行上限時，server 的 job log 要看得到截斷提示，
+// 不能只留在 agent 本機 log。
+func TestRunJobReportsTruncationToJobLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 head/tr")
+	}
+	const hint = "■ 輸出單行超過 1MB，其餘輸出略過"
+	var mu sync.Mutex
+	var logLines []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logLines = append(logLines, body.Lines...)
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 14, ShellCmd: `head -c 2000000 /dev/zero | tr '\0' a; echo`, CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, l := range logLines {
+		if l == hint {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("job log 應含一次截斷提示，實際 %d 次: %q", n, logLines)
+	}
+}
+
 func endsWith(s, suf string) bool { return len(s) >= len(suf) && s[len(s)-len(suf):] == suf }
 
 func TestPollOnce(t *testing.T) {
@@ -115,5 +194,381 @@ func TestPollOnce204(t *testing.T) {
 	evt, _, err := a.pollOnce(0)
 	if err != nil || evt != "" {
 		t.Fatalf("204 poll: %q %v", evt, err)
+	}
+}
+
+// TestRunJobBatchesLogs: 120 行輸出要批次送出（不是每行一次 HTTP），
+// 行序不亂，且所有 /log 都早於 /result。
+func TestRunJobBatchesLogs(t *testing.T) {
+	var mu sync.Mutex
+	var logBatches [][]string
+	var order []string // 依到達順序記錄 "log" / "result"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logBatches = append(logBatches, body.Lines)
+			order = append(order, "log")
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			order = append(order, "result")
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 9, ShellCmd: "for i in $(seq 1 120); do echo line$i; done", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	var lines []string
+	for _, b := range logBatches {
+		lines = append(lines, b...)
+	}
+	if len(lines) != 120 {
+		t.Fatalf("lines=%d, want 120", len(lines))
+	}
+	for i, l := range lines {
+		if want := fmt.Sprintf("line%d", i+1); l != want {
+			t.Fatalf("line %d = %q, want %q", i, l, want)
+		}
+	}
+	if len(logBatches) > 5 {
+		t.Fatalf("log requests=%d, want <= 5", len(logBatches))
+	}
+	if len(order) == 0 || order[len(order)-1] != "result" || len(order) != len(logBatches)+1 {
+		t.Fatalf("order=%v: want all /log before the single /result", order)
+	}
+}
+
+// TestRunJobRetriesFinalLogFlushBeforeResult: 最後的 flush 前兩次回 500、第三次成功，
+// 所有行都要送達，且所有 /log 請求（含失敗的）都必須早於 /result。
+func TestRunJobRetriesFinalLogFlushBeforeResult(t *testing.T) {
+	var mu sync.Mutex
+	var delivered []string
+	var order []string // 依到達順序記錄 "log" / "result"
+	logCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			defer mu.Unlock()
+			logCalls++
+			order = append(order, "log")
+			if logCalls <= 2 {
+				w.WriteHeader(500)
+				return
+			}
+			delivered = append(delivered, body.Lines...)
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			order = append(order, "result")
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 10, ShellCmd: "echo line1; echo line2; echo line3", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	if got := fmt.Sprint(delivered); got != "[line1 line2 line3]" {
+		t.Fatalf("delivered=%s, want [line1 line2 line3]; order=%v", got, order)
+	}
+	if n := len(order); n < 4 || order[n-1] != "result" {
+		t.Fatalf("order=%v: want >=3 /log attempts then /result", order)
+	}
+	for _, o := range order[:len(order)-1] {
+		if o != "log" {
+			t.Fatalf("order=%v: all /log must precede /result", order)
+		}
+	}
+}
+
+// TestRunJobGivesUpFinalLogFlushButReportsResult: 最後的 flush 連續 3 次失敗就放棄，但 result 仍要回報。
+func TestRunJobGivesUpFinalLogFlushButReportsResult(t *testing.T) {
+	var mu sync.Mutex
+	logAttempts := 0
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			mu.Lock()
+			logAttempts++
+			mu.Unlock()
+			w.WriteHeader(500)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 11, ShellCmd: "echo x", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if logAttempts != logFinalFlushTries {
+		t.Fatalf("log attempts=%d, want %d", logAttempts, logFinalFlushTries)
+	}
+	if result["status"] != "success" {
+		t.Fatalf("result=%v, want success", result)
+	}
+}
+
+// TestRunJobAbortArrivingAfterExitIsNotAborted: 指令已正常結束，abort 輪詢的回應卻在 RunJob 收尾前才到，
+// 結果仍必須是 success 且不記中止 log（aborted 只能在指令結束後讀一次）。
+func TestRunJobAbortArrivingAfterExitIsNotAborted(t *testing.T) {
+	flag := filepath.Join(t.TempDir(), "polling")
+	var mu sync.Mutex
+	var logged []string
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logged = append(logged, body.Lines...)
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			// 指令等這個旗標出現才結束，確保 abort 輪詢已在執行中；回應延後到指令結束之後才送達。
+			os.WriteFile(flag, nil, 0o644)
+			time.Sleep(500 * time.Millisecond)
+			w.Write([]byte(`{"abort":true}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	shell := fmt.Sprintf("until [ -f '%s' ]; do sleep 0.01; done", flag)
+	a.RunJob(Job{ID: 12, ShellCmd: shell, CurrentCmd: "true"}, 5*time.Millisecond, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if result["status"] != "success" {
+		t.Fatalf("result=%v, want success", result)
+	}
+	for _, l := range logged {
+		if strings.Contains(l, "中止") {
+			t.Fatalf("logged=%q, 已正常完成的工作不該記中止 log", logged)
+		}
+	}
+}
+
+// TestRunJobKeepsControlPollingDuringVersionVerification: 版本驗證（CurrentCmd）明顯慢於 controlInterval 時，
+// /control 輪詢必須持續送出；否則 server 的 reaper 會把仍在執行的 job 誤標為 failed。
+func TestRunJobKeepsControlPollingDuringVersionVerification(t *testing.T) {
+	var mu sync.Mutex
+	var controlAt []time.Time
+	var resultAt time.Time
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			mu.Lock()
+			controlAt = append(controlAt, time.Now())
+			mu.Unlock()
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			resultAt = time.Now()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 13, ShellCmd: "true", CurrentCmd: "sleep 0.5; echo cc 2.1.102"}, 20*time.Millisecond, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if result["status"] != "success" || result["new_version"] != "2.1.102" {
+		t.Fatalf("result=%v", result)
+	}
+	// 結果前 300ms 都落在 500ms 的版本驗證期間內，controlInterval 20ms 下應有約 15 次輪詢。
+	n := 0
+	for _, ts := range controlAt {
+		if ts.After(resultAt.Add(-300 * time.Millisecond)) {
+			n++
+		}
+	}
+	if n < 3 {
+		t.Fatalf("版本驗證期間只收到 %d 次 /control（want >= 3）", n)
+	}
+}
+
+// TestLogBatcherRetriesFailedBatchInOrder: 送出失敗的整批要放回緩衝最前面，下次照原順序再送。
+func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
+	var sent []string
+	fail := true
+	b := &logBatcher{send: func(lines []string) error {
+		if fail {
+			return errors.New("server down")
+		}
+		sent = append(sent, lines...)
+		return nil
+	}}
+	b.add("a")
+	b.add("b")
+	b.flush() // 失敗：a、b 放回緩衝
+	fail = false
+	b.add("c")
+	b.flush()
+	if got := fmt.Sprint(sent); got != "[a b c]" {
+		t.Fatalf("sent=%s, want [a b c]", got)
+	}
+}
+
+// TestLogBatcherAddDoesNotWaitForSlowPost: sender 正在 POST（/log 卡住）時，add 必須立即返回，
+// 不能等 sendMu，也不能在 bufMu 內做網路 I/O。舊版在 add 內同步 POST，每 50 行就卡住一次。
+func TestLogBatcherAddDoesNotWaitForSlowPost(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	var mu sync.Mutex
+	var got []string
+	logs := &logBatcher{kick: make(chan struct{}, 1), send: func(lines []string) error {
+		once.Do(func() {
+			close(started) // 通知測試：send 已開始
+			<-release      // 模擬慢速 /log，直到測試放行
+		})
+		mu.Lock()
+		got = append(got, lines...)
+		mu.Unlock()
+		return nil
+	}}
+	stop, runDone := make(chan struct{}), make(chan struct{})
+	go func() { defer close(runDone); logs.run(stop) }()
+
+	// 第 logBatchSize 行觸發 kick，背景 sender 開始送；填滿本身不該被 send 拖住。
+	fill := make(chan struct{})
+	go func() {
+		defer close(fill)
+		for i := 1; i <= logBatchSize; i++ {
+			logs.add(fmt.Sprintf("line%d", i))
+		}
+	}()
+	select {
+	case <-fill:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("填滿批次的 add 被 send 拖住")
+	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("背景 sender 沒有開始送出")
+	}
+
+	// send 卡住期間，add 必須在 100ms 內返回。
+	added := make(chan struct{})
+	go func() { logs.add("late"); close(added) }()
+	select {
+	case <-added:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("send 進行中 add 被阻塞超過 100ms")
+	}
+
+	close(release)
+	close(stop)
+	<-runDone
+	<-added
+	<-fill
+	logs.flush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != logBatchSize+1 || got[0] != "line1" || got[len(got)-1] != "late" {
+		t.Fatalf("got %d lines: %q", len(got), got)
+	}
+}
+
+// TestLogBatcherCapsBuffer: 持續送不出去時緩衝上限 logBufMax，超過丟最舊的。
+func TestLogBatcherCapsBuffer(t *testing.T) {
+	var sent []string
+	fail := true
+	b := &logBatcher{send: func(lines []string) error {
+		if fail {
+			return errors.New("server down")
+		}
+		sent = append(sent, lines...)
+		return nil
+	}}
+	for i := 1; i <= logBufMax+1; i++ {
+		b.add(fmt.Sprintf("line%d", i))
+	}
+	fail = false
+	b.flush()
+	if len(sent) != logBufMax || sent[0] != "line2" || sent[len(sent)-1] != fmt.Sprintf("line%d", logBufMax+1) {
+		t.Fatalf("sent %d lines, first=%q last=%q", len(sent), sent[0], sent[len(sent)-1])
+	}
+}
+
+// TestLogBatcherTrimReleasesDroppedLines: 被丟掉的行不能仍被底層陣列參照，否則字串無法被 GC 回收。
+func TestLogBatcherTrimReleasesDroppedLines(t *testing.T) {
+	b := &logBatcher{send: func([]string) error { return nil }}
+	b.buf = make([]string, 0, 2) // 預先配置容量，讓後續 add 不換底層陣列
+	b.add(strings.Repeat("a", logBufMaxBytes/2))
+	backing := b.buf[:1]                           // 與 b.buf 共用底層陣列，用來檢查被丟掉的那一格
+	b.add(strings.Repeat("b", logBufMaxBytes/2+1)) // 合計超過位元組上限，丟掉第一行
+	if len(b.buf) != 1 || b.buf[0][0] != 'b' {
+		t.Fatalf("buf 應只剩最新一行，got len=%d", len(b.buf))
+	}
+	if backing[0] != "" {
+		t.Fatalf("被丟掉的行仍被底層陣列參照（長度 %d），GC 無法回收", len(backing[0]))
+	}
+}
+
+// TestLogBatcherCapsBytesAndSplitsPosts: 10 行 × 0.5MB 超過 logBufMaxBytes(4MiB)，只留最新 8 行；
+// 每次 POST 位元組數都不超過 logPostMaxBytes(1MiB)。
+func TestLogBatcherCapsBytesAndSplitsPosts(t *testing.T) {
+	var posts []int
+	var sent []string
+	b := &logBatcher{send: func(lines []string) error {
+		n := 0
+		for _, l := range lines {
+			n += len(l)
+		}
+		posts = append(posts, n)
+		sent = append(sent, lines...)
+		return nil
+	}}
+	body := strings.Repeat("x", 500_000)
+	for i := 1; i <= 10; i++ {
+		b.add(fmt.Sprintf("%d:%s", i, body))
+	}
+	b.flush()
+	for _, n := range posts {
+		if n > logPostMaxBytes {
+			t.Fatalf("POST %d bytes, want <= %d", n, logPostMaxBytes)
+		}
+	}
+	if len(sent) != 8 || !strings.HasPrefix(sent[0], "3:") {
+		t.Fatalf("kept %d lines (want 8), first prefix %.5q (want \"3:\")", len(sent), sent[0])
 	}
 }

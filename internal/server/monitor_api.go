@@ -39,7 +39,7 @@ func (s *Server) agentSystem(r *http.Request) (string, bool) {
 	if sys, err := s.st.SystemByAgentToken(tok); err == nil {
 		return sys.ID, true
 	}
-	if m := inventory.MachineForToken(s.inv, tok); m != "" {
+	if m := inventory.MachineForToken(s.getInv(), tok); m != "" {
 		id, err := s.st.EnsureSystemForMachine(m)
 		return id, err == nil
 	}

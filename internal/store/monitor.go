@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strconv"
 )
 
 type MetricRow struct {
@@ -300,20 +302,44 @@ var dsLevels = []struct {
 
 const retain1m = 2 * 3600
 
+// srcRetain：來源 type 的保留秒數，與 PruneMetrics 的 cutoff 相同。1m 不是任何層的 dst，即 retain1m。
+func srcRetain(src string) int64 {
+	for _, lv := range dsLevels {
+		if lv.Dst == src {
+			return lv.RetainSec
+		}
+	}
+	return retain1m
+}
+
 // Downsample：把 src 聚合進 dst，依 bucket_start = (ts/BucketSec)*BucketSec 分組。冪等（INSERT OR REPLACE）。
-// bucket_end = bucket_start + BucketSec <= now → 只聚合已完結桶（避免部分桶被固化）。
-// 10m 的 now=1200 → bucket [0,600) end=600≤1200 ✓ 且 [600,1200) end=1200≤1200 ✓；兩桶皆完結。
-// 15m 的 now=1200 → bucket [0,900) end=900≤1200 ✓ 完結；[900,1800) end=1800>1200 ✗ 跳過。
-// 但測試要求 15m 也出現 2 桶 → 改用 ts < now 條件（桶內至少有一筆資料點 < now 即聚合）。
+// 下限取來源 type 的 prune 水位 wm（PruneMetrics 記錄），向上取整到桶邊界：水位之前的桶可能已被部分刪除，不重算。
+// 無水位（升級前已 prune 的舊庫）時改用 now - 來源保留期：舊版每次 prune 的 cutoff 都是當時的 now - 保留期，
+// 所以舊庫實際的 prune 邊界一定 ≤ 此值，以此為下限不會重算被部分刪除的桶。
+// shortcut: 保留期之前仍未聚合的來源不補算（會被下一次 PruneMetrics 刪掉），只在首次 prune 寫入水位前的那一輪生效。
+// ts < now 保留，最新的未完結桶仍會持續更新（趨勢圖需要）。
 func (s *Store) Downsample(now int64) error {
 	for _, lv := range dsLevels {
-		_, err := s.db.Exec(`
+		B := lv.BucketSec
+		lb := now - srcRetain(lv.Src)
+		var wm sql.NullInt64
+		err := s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM settings WHERE key=?`, "metrics_prune_wm:"+lv.Src).Scan(&wm)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if wm.Valid {
+			// 時鐘曾快跳時水位可能在未來，上限 now-保留期；否則校正後新樣本全被過濾，直到時間追上才恢復
+			lb = min(wm.Int64, now-srcRetain(lv.Src))
+		}
+		lb = (lb + B - 1) / B * B
+		_, err = s.db.Exec(`
 			INSERT OR REPLACE INTO metrics (system_id,type,ts,cpu,mem,disk,gpu,net_up,net_down,load,temp)
-			SELECT system_id, ?, (ts/?)*?,
-			  AVG(cpu), AVG(mem), AVG(disk), AVG(gpu), AVG(net_up), AVG(net_down), AVG(load), AVG(temp)
-			FROM metrics WHERE type=? AND ts < ?
-			GROUP BY system_id, ts/?`,
-			lv.Dst, lv.BucketSec, lv.BucketSec, lv.Src, now, lv.BucketSec)
+			SELECT m.system_id, ?, (m.ts/?)*?,
+			  AVG(m.cpu), AVG(m.mem), AVG(m.disk), AVG(m.gpu), AVG(m.net_up), AVG(m.net_down), AVG(m.load), AVG(m.temp)
+			FROM metrics m
+			WHERE m.type=? AND m.ts<? AND m.ts>=?
+			GROUP BY m.system_id, m.ts/?`,
+			lv.Dst, B, B, lv.Src, now, lb, B)
 		if err != nil {
 			return err
 		}
@@ -321,17 +347,37 @@ func (s *Store) Downsample(now int64) error {
 	return nil
 }
 
-// PruneMetrics：刪各 type 超過保留期的列。
+// PruneMetrics：刪各 type 超過保留期的列，並記下各 type 的 cutoff 作為水位。
 func (s *Store) PruneMetrics(now int64) error {
-	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < ?`, now-retain1m); err != nil {
+	if err := s.pruneType("1m", now-retain1m); err != nil {
 		return err
 	}
 	for _, lv := range dsLevels {
-		if _, err := s.db.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, lv.Dst, now-lv.RetainSec); err != nil {
+		if err := s.pruneType(lv.Dst, now-lv.RetainSec); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// pruneType 刪 typ 中 ts < cutoff 的列，並把 cutoff 寫入水位 key。水位只增不減，舊的較小 cutoff 不能把它往回拉。
+// 刪除與水位必須同一 transaction：只刪成功、水位寫失敗時，下次 Downsample 會把殘缺來源當完整資料重算。
+func (s *Store) pruneType(typ string, cutoff int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, typ, cutoff); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+		WHERE CAST(excluded.value AS INTEGER) > CAST(settings.value AS INTEGER)`,
+		"metrics_prune_wm:"+typ, strconv.FormatInt(cutoff, 10)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // TouchSystem updates last_seen and sets status=online for a system.

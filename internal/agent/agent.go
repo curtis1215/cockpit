@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -85,6 +86,7 @@ type Agent struct {
 	doUpgrade func() (bool, error)
 	// exit terminates the process. Defaults to os.Exit. Injectable for testing.
 	exit       func(int)
+	clientOnce sync.Once // RunJob 的 control 輪詢與最後 flush 會併發呼叫 c()
 	client     *httpx.Client
 	pollClient *httpx.Client
 	col        *collect.Collector
@@ -93,9 +95,7 @@ type Agent struct {
 }
 
 func (a *Agent) c() *httpx.Client {
-	if a.client == nil {
-		a.client = httpx.New(a.ServerURL, 20*time.Second)
-	}
+	a.clientOnce.Do(func() { a.client = httpx.New(a.ServerURL, 20*time.Second) })
 	return a.client
 }
 
@@ -305,52 +305,185 @@ func (a *Agent) ReportVersions(execTimeout time.Duration) {
 	}
 }
 
+const (
+	logBatchSize       = 50          // 緩衝剛好達到這個行數就喚醒背景 sender（非阻塞，add 本身不送）
+	logBufMax          = 5000        // shortcut: 送不出去時最多暫存 5000 行且總計 4MiB，超過丟最舊的；要完整保留就改成落地暫存檔
+	logBufMaxBytes     = 4 << 20     // 5000 行 × 近 1MiB 會占用數 GiB，所以另設位元組上限
+	logPostMaxBytes    = 1 << 20     // 單次 POST 的位元組上限，超過就分批送
+	logFinalFlushTries = 3           // job 結束後最後一次 flush 的嘗試次數（含第一次）
+	logFinalFlushWait  = time.Second // 最後 flush 每次嘗試之間的間隔
+)
+
+// logBatcher 把 job log 攢成批次送出，避免每行一次 HTTP 拖慢指令輸出。
+// bufMu 只保護 buf，add 在鎖內 append 後立即返回、絕不做網路 I/O；
+// sendMu 保證同一時間只有一個 sender，行序不亂。
+type logBatcher struct {
+	bufMu    sync.Mutex
+	buf      []string
+	bufBytes int
+	sendMu   sync.Mutex
+	kick     chan struct{} // 容量 1，達 logBatchSize 時非阻塞通知 run 送出
+	send     func([]string) error
+}
+
+func (b *logBatcher) add(line string) {
+	b.bufMu.Lock()
+	defer b.bufMu.Unlock()
+	b.buf = append(b.buf, line)
+	b.bufBytes += len(line)
+	b.trimLocked()
+	// == 而非 >=：送失敗回補後不重複觸發，server 掛掉時不會每行都打一次 HTTP
+	if len(b.buf) == logBatchSize {
+		select {
+		case b.kick <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// run 背景送出：每秒一次，或被 add 喚醒時送出；stop 關閉後返回。
+func (b *logBatcher) run(stop <-chan struct{}) {
+	tk := time.NewTicker(time.Second)
+	defer tk.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-tk.C:
+		case <-b.kick:
+		}
+		b.flush()
+	}
+}
+
+// flush 把整個緩衝分批送出（每次 POST ≤ logPostMaxBytes）；失敗就把未送出的行放回最前面，下次再送。
+func (b *logBatcher) flush() error {
+	b.sendMu.Lock()
+	defer b.sendMu.Unlock()
+	b.bufMu.Lock()
+	pending := b.buf
+	b.buf, b.bufBytes = nil, 0
+	b.bufMu.Unlock()
+	for len(pending) > 0 {
+		n, size := 0, 0
+		for n < len(pending) && (n == 0 || size+len(pending[n]) <= logPostMaxBytes) {
+			size += len(pending[n])
+			n++
+		}
+		if err := b.send(pending[:n]); err != nil {
+			b.requeue(pending)
+			return err
+		}
+		pending = pending[n:]
+	}
+	return nil
+}
+
+// finalFlush 在背景 sender 停止後呼叫：最多嘗試 logFinalFlushTries 次，全部失敗就放棄並記 log。
+// 呼叫端仍須回報 result，不能因 log 送不出去而不結束 job。
+func (b *logBatcher) finalFlush() {
+	var err error
+	for i := 0; i < logFinalFlushTries; i++ {
+		if i > 0 {
+			time.Sleep(logFinalFlushWait)
+		}
+		if err = b.flush(); err == nil {
+			return
+		}
+	}
+	b.bufMu.Lock()
+	n := len(b.buf)
+	b.bufMu.Unlock()
+	log.Printf("agent: job log 最後 flush 失敗，放棄 %d 行: %v", n, err)
+}
+
+// requeue 把未送出的行放回緩衝最前面，超過上限就丟最舊的。
+func (b *logBatcher) requeue(lines []string) {
+	b.bufMu.Lock()
+	defer b.bufMu.Unlock()
+	for _, l := range lines {
+		b.bufBytes += len(l)
+	}
+	b.buf = append(append([]string(nil), lines...), b.buf...)
+	b.trimLocked()
+}
+
+// trimLocked 超過行數或位元組上限就從最舊的行開始丟。呼叫端須持有 bufMu。
+func (b *logBatcher) trimLocked() {
+	drop := 0
+	for drop < len(b.buf) && (len(b.buf)-drop > logBufMax || b.bufBytes > logBufMaxBytes) {
+		b.bufBytes -= len(b.buf[drop])
+		drop++
+	}
+	clear(b.buf[:drop]) // 底層陣列仍會參照被丟的字串，不清掉 GC 就無法回收
+	b.buf = b.buf[drop:]
+}
+
 // RunJob 執行 server 渲染好的指令：串流 log、輪詢 abort、成功後驗證新版本、回報結果。
 func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var aborted atomic.Bool
-	stop := make(chan struct{})
-	defer close(stop)
+	ctlStop, ctlDone := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(ctlDone)
 		tk := time.NewTicker(controlInterval)
 		defer tk.Stop()
 		for {
 			select {
-			case <-stop:
+			case <-ctlStop:
 				return
 			case <-tk.C:
 				var ctrl struct {
 					Abort bool `json:"abort"`
 				}
+				// 不在 abort 後 return：版本驗證期間 control 輪詢仍須持續，直到收尾才停。
 				if _, err := a.c().GetJSON(fmt.Sprintf("/api/agent/jobs/%d/control", job.ID), a.Token, &ctrl); err == nil && ctrl.Abort {
 					aborted.Store(true)
 					cancel()
-					return
 				}
 			}
 		}
 	}()
-	post := func(line string) {
-		a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": []string{line}}, nil)
+	logs := &logBatcher{kick: make(chan struct{}, 1), send: func(lines []string) error {
+		_, err := a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": lines}, nil)
+		return err
+	}}
+	logStop, logDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(logDone)
+		logs.run(logStop)
+	}()
+	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
+	// 截斷只寫 job log：server 看不到 agent 本機 log；版本偵測的 Run 不經這裡
+	if res.Truncated {
+		logs.add("■ 輸出單行超過 1MB，其餘輸出略過")
 	}
-	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, post)
-	if aborted.Load() {
-		post("■ 已由使用者中止")
-		a.reportResult(job.ID, "aborted", res.ExitCode, "")
-		return
+	// 只讀一次：log 與結果必須一致，abort 若在此之後才到，就視為指令已正常完成。
+	wasAborted := aborted.Load()
+	status, newVer := "success", ""
+	switch {
+	case wasAborted:
+		logs.add("■ 已由使用者中止")
+		status = "aborted"
+	case res.ExitCode != 0:
+		status = "failed"
+	default:
+		// 驗證期間 control 輪詢仍在跑，server 才不會把執行中的 job 當成失聯。
+		executor.Run(context.Background(), job.CurrentCmd, job.Cwd, execTimeout, func(l string) {
+			if v := version.Parse(l, job.VersionRegex); v != "" && newVer == "" {
+				newVer = v
+			}
+		})
 	}
-	if res.ExitCode != 0 {
-		a.reportResult(job.ID, "failed", res.ExitCode, "")
-		return
-	}
-	newVer := ""
-	executor.Run(context.Background(), job.CurrentCmd, job.Cwd, execTimeout, func(l string) {
-		if v := version.Parse(l, job.VersionRegex); v != "" && newVer == "" {
-			newVer = v
-		}
-	})
-	a.reportResult(job.ID, "success", res.ExitCode, newVer)
+	// 收尾：先停 log sender 並做最後 flush（可能重試數秒），control 輪詢撐到 result 送出前才停。
+	// log 必須早於 result 送達；flush 只在 sender 停止後呼叫，不與它併發。
+	close(logStop)
+	<-logDone
+	logs.finalFlush()
+	close(ctlStop)
+	<-ctlDone
+	a.reportResult(job.ID, status, res.ExitCode, newVer)
 }
 
 func (a *Agent) reportResult(jobID int64, status string, exit int, newVersion string) {

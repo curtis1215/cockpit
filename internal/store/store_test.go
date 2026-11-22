@@ -1,6 +1,8 @@
 package store
 
 import (
+	"context"
+	"database/sql"
 	"path/filepath"
 	"testing"
 )
@@ -12,6 +14,30 @@ func open(t *testing.T) *Store {
 	}
 	t.Cleanup(func() { s.Close() })
 	return s
+}
+
+// PRAGMA 是逐條連線生效；同時持有 3 條連線，確認每一條都有 busy_timeout。
+func TestPragmaAppliedToEveryConnection(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	var conns []*sql.Conn
+	for i := 0; i < 3; i++ {
+		c, err := s.db.Conn(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+		conns = append(conns, c)
+	}
+	for i, c := range conns {
+		var timeout int
+		if err := c.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&timeout); err != nil {
+			t.Fatal(err)
+		}
+		if timeout != 5000 {
+			t.Fatalf("conn %d busy_timeout=%d, want 5000", i, timeout)
+		}
+	}
 }
 
 func TestRegisterAndLookup(t *testing.T) {
