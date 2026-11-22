@@ -340,6 +340,51 @@ func TestRunJobAbortArrivingAfterExitIsNotAborted(t *testing.T) {
 	}
 }
 
+// TestRunJobKeepsControlPollingDuringVersionVerification: 版本驗證（CurrentCmd）明顯慢於 controlInterval 時，
+// /control 輪詢必須持續送出；否則 server 的 reaper 會把仍在執行的 job 誤標為 failed。
+func TestRunJobKeepsControlPollingDuringVersionVerification(t *testing.T) {
+	var mu sync.Mutex
+	var controlAt []time.Time
+	var resultAt time.Time
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			mu.Lock()
+			controlAt = append(controlAt, time.Now())
+			mu.Unlock()
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			resultAt = time.Now()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 13, ShellCmd: "true", CurrentCmd: "sleep 0.5; echo cc 2.1.102"}, 20*time.Millisecond, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if result["status"] != "success" || result["new_version"] != "2.1.102" {
+		t.Fatalf("result=%v", result)
+	}
+	// 結果前 300ms 都落在 500ms 的版本驗證期間內，controlInterval 20ms 下應有約 15 次輪詢。
+	n := 0
+	for _, ts := range controlAt {
+		if ts.After(resultAt.Add(-300 * time.Millisecond)) {
+			n++
+		}
+	}
+	if n < 3 {
+		t.Fatalf("版本驗證期間只收到 %d 次 /control（want >= 3）", n)
+	}
+}
+
 // TestLogBatcherRetriesFailedBatchInOrder: 送出失敗的整批要放回緩衝最前面，下次照原順序再送。
 func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
 	var sent []string

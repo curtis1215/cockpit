@@ -86,6 +86,7 @@ type Agent struct {
 	doUpgrade func() (bool, error)
 	// exit terminates the process. Defaults to os.Exit. Injectable for testing.
 	exit       func(int)
+	clientOnce sync.Once // RunJob 的 control 輪詢與最後 flush 會併發呼叫 c()
 	client     *httpx.Client
 	pollClient *httpx.Client
 	col        *collect.Collector
@@ -94,9 +95,7 @@ type Agent struct {
 }
 
 func (a *Agent) c() *httpx.Client {
-	if a.client == nil {
-		a.client = httpx.New(a.ServerURL, 20*time.Second)
-	}
+	a.clientOnce.Do(func() { a.client = httpx.New(a.ServerURL, 20*time.Second) })
 	return a.client
 }
 
@@ -437,10 +436,10 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 				var ctrl struct {
 					Abort bool `json:"abort"`
 				}
+				// 不在 abort 後 return：版本驗證期間 control 輪詢仍須持續，直到收尾才停。
 				if _, err := a.c().GetJSON(fmt.Sprintf("/api/agent/jobs/%d/control", job.ID), a.Token, &ctrl); err == nil && ctrl.Abort {
 					aborted.Store(true)
 					cancel()
-					return
 				}
 			}
 		}
@@ -457,31 +456,29 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
 	// 只讀一次：log 與結果必須一致，abort 若在此之後才到，就視為指令已正常完成。
 	wasAborted := aborted.Load()
-	if wasAborted {
+	status, newVer := "success", ""
+	switch {
+	case wasAborted:
 		logs.add("■ 已由使用者中止")
+		status = "aborted"
+	case res.ExitCode != 0:
+		status = "failed"
+	default:
+		// 驗證期間 control 輪詢仍在跑，server 才不會把執行中的 job 當成失聯。
+		executor.Run(context.Background(), job.CurrentCmd, job.Cwd, execTimeout, func(l string) {
+			if v := version.Parse(l, job.VersionRegex); v != "" && newVer == "" {
+				newVer = v
+			}
+		})
 	}
-	// 先停掉背景的 abort 輪詢與 log sender 並等它們結束：之後只剩這個 goroutine 打 API，
-	// 最後的 flush 不與它們併發，且 log 必須早於 result 送達。
-	close(ctlStop)
+	// 收尾：先停 log sender 並做最後 flush（可能重試數秒），control 輪詢撐到 result 送出前才停。
+	// log 必須早於 result 送達；flush 只在 sender 停止後呼叫，不與它併發。
 	close(logStop)
-	<-ctlDone
 	<-logDone
 	logs.finalFlush()
-	if wasAborted {
-		a.reportResult(job.ID, "aborted", res.ExitCode, "")
-		return
-	}
-	if res.ExitCode != 0 {
-		a.reportResult(job.ID, "failed", res.ExitCode, "")
-		return
-	}
-	newVer := ""
-	executor.Run(context.Background(), job.CurrentCmd, job.Cwd, execTimeout, func(l string) {
-		if v := version.Parse(l, job.VersionRegex); v != "" && newVer == "" {
-			newVer = v
-		}
-	})
-	a.reportResult(job.ID, "success", res.ExitCode, newVer)
+	close(ctlStop)
+	<-ctlDone
+	a.reportResult(job.ID, status, res.ExitCode, newVer)
 }
 
 func (a *Agent) reportResult(jobID int64, status string, exit int, newVersion string) {
