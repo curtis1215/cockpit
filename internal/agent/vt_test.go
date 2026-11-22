@@ -2,8 +2,11 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -115,5 +118,99 @@ func TestPollOnce204(t *testing.T) {
 	evt, _, err := a.pollOnce(0)
 	if err != nil || evt != "" {
 		t.Fatalf("204 poll: %q %v", evt, err)
+	}
+}
+
+// TestRunJobBatchesLogs: 120 行輸出要批次送出（不是每行一次 HTTP），
+// 行序不亂，且所有 /log 都早於 /result。
+func TestRunJobBatchesLogs(t *testing.T) {
+	var mu sync.Mutex
+	var logBatches [][]string
+	var order []string // 依到達順序記錄 "log" / "result"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logBatches = append(logBatches, body.Lines)
+			order = append(order, "log")
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			order = append(order, "result")
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 9, ShellCmd: "for i in $(seq 1 120); do echo line$i; done", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	var lines []string
+	for _, b := range logBatches {
+		lines = append(lines, b...)
+	}
+	if len(lines) != 120 {
+		t.Fatalf("lines=%d, want 120", len(lines))
+	}
+	for i, l := range lines {
+		if want := fmt.Sprintf("line%d", i+1); l != want {
+			t.Fatalf("line %d = %q, want %q", i, l, want)
+		}
+	}
+	if len(logBatches) > 5 {
+		t.Fatalf("log requests=%d, want <= 5", len(logBatches))
+	}
+	if len(order) == 0 || order[len(order)-1] != "result" || len(order) != len(logBatches)+1 {
+		t.Fatalf("order=%v: want all /log before the single /result", order)
+	}
+}
+
+// TestLogBatcherRetriesFailedBatchInOrder: 送出失敗的整批要放回緩衝最前面，下次照原順序再送。
+func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
+	var sent []string
+	fail := true
+	b := &logBatcher{send: func(lines []string) error {
+		if fail {
+			return errors.New("server down")
+		}
+		sent = append(sent, lines...)
+		return nil
+	}}
+	b.add("a")
+	b.add("b")
+	b.flush() // 失敗：a、b 放回緩衝
+	fail = false
+	b.add("c")
+	b.flush()
+	if got := fmt.Sprint(sent); got != "[a b c]" {
+		t.Fatalf("sent=%s, want [a b c]", got)
+	}
+}
+
+// TestLogBatcherCapsBuffer: 持續送不出去時緩衝上限 logBufMax，超過丟最舊的。
+func TestLogBatcherCapsBuffer(t *testing.T) {
+	var sent []string
+	fail := true
+	b := &logBatcher{send: func(lines []string) error {
+		if fail {
+			return errors.New("server down")
+		}
+		sent = append(sent, lines...)
+		return nil
+	}}
+	for i := 1; i <= logBufMax+1; i++ {
+		b.add(fmt.Sprintf("line%d", i))
+	}
+	fail = false
+	b.flush()
+	if len(sent) != logBufMax || sent[0] != "line2" || sent[len(sent)-1] != fmt.Sprintf("line%d", logBufMax+1) {
+		t.Fatalf("sent %d lines, first=%q last=%q", len(sent), sent[0], sent[len(sent)-1])
 	}
 }

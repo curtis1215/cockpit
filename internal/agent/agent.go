@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -305,6 +306,49 @@ func (a *Agent) ReportVersions(execTimeout time.Duration) {
 	}
 }
 
+const (
+	logBatchSize = 50   // 緩衝剛好達到這個行數就立刻送
+	logBufMax    = 5000 // shortcut: 持續送不出去時最多暫存 5000 行、超過丟最舊的，要完整保留就改成落地暫存檔
+)
+
+// logBatcher 把 job log 攢成批次送出，避免每行一次 HTTP 拖慢指令輸出。
+type logBatcher struct {
+	mu   sync.Mutex
+	buf  []string
+	send func([]string) error
+}
+
+func (b *logBatcher) add(line string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, line)
+	if len(b.buf) > logBufMax {
+		b.buf = b.buf[len(b.buf)-logBufMax:]
+	}
+	// == 而非 >=：送失敗回補後不重複觸發，server 掛掉時不會每行都打一次 HTTP
+	if len(b.buf) == logBatchSize {
+		b.flushLocked()
+	}
+}
+
+func (b *logBatcher) flush() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.flushLocked()
+}
+
+// flushLocked 送出整個緩衝；失敗就把整批放回最前面，下次再送。呼叫端須持有 mu。
+func (b *logBatcher) flushLocked() {
+	if len(b.buf) == 0 {
+		return
+	}
+	batch := b.buf
+	b.buf = nil
+	if b.send(batch) != nil {
+		b.buf = batch
+	}
+}
+
 // RunJob 執行 server 渲染好的指令：串流 log、輪詢 abort、成功後驗證新版本、回報結果。
 func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -331,12 +375,28 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 			}
 		}
 	}()
-	post := func(line string) {
-		a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": []string{line}}, nil)
-	}
-	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, post)
+	logs := &logBatcher{send: func(lines []string) error {
+		_, err := a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": lines}, nil)
+		return err
+	}}
+	go func() {
+		tk := time.NewTicker(time.Second)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-tk.C:
+				logs.flush()
+			}
+		}
+	}()
+	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
 	if aborted.Load() {
-		post("■ 已由使用者中止")
+		logs.add("■ 已由使用者中止")
+	}
+	logs.flush() // log 必須早於 result 送達
+	if aborted.Load() {
 		a.reportResult(job.ID, "aborted", res.ExitCode, "")
 		return
 	}
