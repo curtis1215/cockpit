@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"math"
 	"strconv"
 )
 
@@ -303,27 +302,35 @@ var dsLevels = []struct {
 
 const retain1m = 2 * 3600
 
+// srcRetain：來源 type 的保留秒數，與 PruneMetrics 的 cutoff 相同。1m 不是任何層的 dst，即 retain1m。
+func srcRetain(src string) int64 {
+	for _, lv := range dsLevels {
+		if lv.Dst == src {
+			return lv.RetainSec
+		}
+	}
+	return retain1m
+}
+
 // Downsample：把 src 聚合進 dst，依 bucket_start = (ts/BucketSec)*BucketSec 分組。冪等（INSERT OR REPLACE）。
 // 下限取來源 type 的 prune 水位 wm（PruneMetrics 記錄），向上取整到桶邊界：水位之前的桶可能已被部分刪除，不重算。
-// 無水位時改由 guessWatermark 判斷；都沒有才不設下限，停機超過保留期時舊來源仍會聚合。
+// 無水位（升級前已 prune 的舊庫）時改用 now - 來源保留期：舊版每次 prune 的 cutoff 都是當時的 now - 保留期，
+// 所以舊庫實際的 prune 邊界一定 ≤ 此值，以此為下限不會重算被部分刪除的桶。
+// shortcut: 保留期之前仍未聚合的來源不補算（會被下一次 PruneMetrics 刪掉），只在首次 prune 寫入水位前的那一輪生效。
 // ts < now 保留，最新的未完結桶仍會持續更新（趨勢圖需要）。
 func (s *Store) Downsample(now int64) error {
 	for _, lv := range dsLevels {
 		B := lv.BucketSec
-		lb := int64(math.MinInt64)
+		lb := now - srcRetain(lv.Src)
 		var wm sql.NullInt64
 		err := s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM settings WHERE key=?`, "metrics_prune_wm:"+lv.Src).Scan(&wm)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		if !wm.Valid {
-			if wm, err = s.guessWatermark(lv.Src, lv.Dst, B); err != nil {
-				return err
-			}
-		}
 		if wm.Valid {
-			lb = (wm.Int64 + B - 1) / B * B
+			lb = wm.Int64
 		}
+		lb = (lb + B - 1) / B * B
 		_, err = s.db.Exec(`
 			INSERT OR REPLACE INTO metrics (system_id,type,ts,cpu,mem,disk,gpu,net_up,net_down,load,temp)
 			SELECT m.system_id, ?, (m.ts/?)*?,
@@ -337,28 +344,6 @@ func (s *Store) Downsample(now int64) error {
 		}
 	}
 	return nil
-}
-
-// guessWatermark：無水位（升級前已 prune、尚未寫入水位）時的保守下限。
-// 來源最早桶若已在 dst 有列，代表它在 prune 前就已聚合，現在可能殘缺，回傳現存最早 ts；否則回 NULL（不設下限）。
-// 不會誤傷「從未 prune、首筆不在邊界」：此時 dst 還沒有該桶的列。
-// shortcut: 只以「dst 已有該桶列」判斷 prune 痕跡，dst 也被清掉時退回不設下限；有水位後即不再進來。
-func (s *Store) guessWatermark(src, dst string, B int64) (sql.NullInt64, error) {
-	var minTS sql.NullInt64
-	if err := s.db.QueryRow(`SELECT MIN(ts) FROM metrics WHERE type=?`, src).Scan(&minTS); err != nil {
-		return sql.NullInt64{}, err
-	}
-	if !minTS.Valid {
-		return sql.NullInt64{}, nil
-	}
-	var seen int
-	if err := s.db.QueryRow(`SELECT EXISTS(SELECT 1 FROM metrics WHERE type=? AND ts=?)`, dst, minTS.Int64/B*B).Scan(&seen); err != nil {
-		return sql.NullInt64{}, err
-	}
-	if seen == 0 {
-		return sql.NullInt64{}, nil
-	}
-	return minTS, nil
 }
 
 // PruneMetrics：刪各 type 超過保留期的列，並記下各 type 的 cutoff 作為水位。
