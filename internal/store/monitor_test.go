@@ -164,3 +164,31 @@ func TestDownsampleAndPrune(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDownsampleSkipsPartiallyPrunedBucket(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 15m 桶 [0,900)：完整 15 筆 1m（ts 0..840，cpu 10..24，平均 17）
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.QueryMetrics(id, "15m", 0)
+	if len(before) != 1 || *before[0].CPU != 17 {
+		t.Fatalf("15m before prune: %+v", before)
+	}
+	// 模擬 prune：刪掉該桶前半段（ts < 450）的 1m 列
+	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < 450`); err != nil {
+		t.Fatal(err)
+	}
+	// now=9000 → 1m 來源保留 7200s，15m 桶 lb = ((9000-7200)/900+1)*900 = 2700，該桶 0 < 2700 不再重算
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	after, _ := s.QueryMetrics(id, "15m", 0)
+	if len(after) != 1 || *after[0].CPU != 17 {
+		t.Fatalf("15m recomputed from pruned sources: %+v", after)
+	}
+}
