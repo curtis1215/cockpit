@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +14,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/curtis1215/cockpit/internal/executor"
 )
 
 func TestReportVersionsOnce(t *testing.T) {
@@ -407,26 +404,64 @@ func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
 	}
 }
 
-// TestLogBatcherAddDoesNotWaitForSlowPost: /log 每次慢 300ms 時，指令執行不能被拖住。
-// 舊版在 add 內同步 POST（每 50 行一次），500 行 = 10 次 × 300ms ≈ 3s。
+// TestLogBatcherAddDoesNotWaitForSlowPost: sender 正在 POST（/log 卡住）時，add 必須立即返回，
+// 不能等 sendMu，也不能在 bufMu 內做網路 I/O。舊版在 add 內同步 POST，每 50 行就卡住一次。
 func TestLogBatcherAddDoesNotWaitForSlowPost(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
 	var mu sync.Mutex
 	var got []string
-	logs := &logBatcher{send: func(lines []string) error {
-		time.Sleep(300 * time.Millisecond)
+	logs := &logBatcher{kick: make(chan struct{}, 1), send: func(lines []string) error {
+		once.Do(func() {
+			close(started) // 通知測試：send 已開始
+			<-release      // 模擬慢速 /log，直到測試放行
+		})
 		mu.Lock()
 		got = append(got, lines...)
 		mu.Unlock()
 		return nil
 	}}
-	start := time.Now()
-	executor.Run(context.Background(), "for i in $(seq 1 500); do echo line$i; done", "", 10*time.Second, logs.add)
-	if d := time.Since(start); d > 2*time.Second {
-		t.Fatalf("executor.Run 被慢速 POST 拖住: %v", d)
+	stop, runDone := make(chan struct{}), make(chan struct{})
+	go func() { defer close(runDone); logs.run(stop) }()
+
+	// 第 logBatchSize 行觸發 kick，背景 sender 開始送；填滿本身不該被 send 拖住。
+	fill := make(chan struct{})
+	go func() {
+		defer close(fill)
+		for i := 1; i <= logBatchSize; i++ {
+			logs.add(fmt.Sprintf("line%d", i))
+		}
+	}()
+	select {
+	case <-fill:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("填滿批次的 add 被 send 拖住")
 	}
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("背景 sender 沒有開始送出")
+	}
+
+	// send 卡住期間，add 必須在 100ms 內返回。
+	added := make(chan struct{})
+	go func() { logs.add("late"); close(added) }()
+	select {
+	case <-added:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("send 進行中 add 被阻塞超過 100ms")
+	}
+
+	close(release)
+	close(stop)
+	<-runDone
+	<-added
+	<-fill
 	logs.flush()
-	if len(got) != 500 || got[0] != "line1" || got[499] != "line500" {
-		t.Fatalf("got %d lines, first=%q", len(got), got[0])
+	mu.Lock()
+	defer mu.Unlock()
+	if len(got) != logBatchSize+1 || got[0] != "line1" || got[len(got)-1] != "late" {
+		t.Fatalf("got %d lines: %q", len(got), got)
 	}
 }
 
