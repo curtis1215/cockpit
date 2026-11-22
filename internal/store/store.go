@@ -40,8 +40,10 @@ type System struct {
 type Store struct{ db *sql.DB }
 
 func Open(path string) (*Store, error) {
+	// 路徑中的 % ? # 是 SQLite URI 語法，需先跳脫，否則檔名會被截斷或開到別的檔案。
+	esc := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
 	// PRAGMA 是逐條連線生效，用 _pragma 參數讓連線池的每條連線都套用。
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	db, err := sql.Open("sqlite", "file:"+esc+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
 	if err != nil {
 		return nil, err
 	}
