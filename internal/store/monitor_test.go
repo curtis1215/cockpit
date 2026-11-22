@@ -262,3 +262,29 @@ func TestPruneWatermarkNeverMovesBack(t *testing.T) {
 		t.Fatalf("watermark moved back: %q", got)
 	}
 }
+
+func TestDownsampleDoesNotRecomputePrePruneBucketWithoutWatermark(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	// 模擬升級前已 prune：刪掉 [0,900) 桶的前半段（ts < 450），但沒有寫入水位。
+	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < 450`); err != nil {
+		t.Fatal(err)
+	}
+	if wm := s.GetSetting("metrics_prune_wm:1m"); wm != "" {
+		t.Fatalf("precondition: unexpected watermark %q", wm)
+	}
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	// 殘缺來源（ts 480..840，cpu 18..24，平均 21）不得覆蓋原本完整聚合值 17
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("pre-prune bucket recomputed without watermark: %+v", pts)
+	}
+}
