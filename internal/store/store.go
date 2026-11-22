@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/hex"
 	"errors"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -39,11 +40,32 @@ type System struct {
 
 type Store struct{ db *sql.DB }
 
-func Open(path string) (*Store, error) {
+// sqliteDSN 把 db_path 轉成 modernc sqlite 的 DSN。
+func sqliteDSN(path string) string {
+	const pragmas = "_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	if strings.HasPrefix(path, "file:") {
+		// 已是 SQLite URI，原樣保留，只接上 _pragma。
+		if strings.Contains(path, "?") {
+			return path + "&" + pragmas
+		}
+		return path + "?" + pragmas
+	}
 	// 路徑中的 % ? # 是 SQLite URI 語法，需先跳脫，否則檔名會被截斷或開到別的檔案。
 	esc := strings.NewReplacer("%", "%25", "?", "%3f", "#", "%23").Replace(path)
-	// PRAGMA 是逐條連線生效，用 _pragma 參數讓連線池的每條連線都套用。
-	db, err := sql.Open("sqlite", "file:"+esc+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
+	if !filepath.IsAbs(path) {
+		return "file:" + esc + "?" + pragmas
+	}
+	if !strings.HasPrefix(esc, "/") {
+		// Windows 磁碟路徑 C:\x → file:///C:/x
+		return "file:///" + filepath.ToSlash(esc) + "?" + pragmas
+	}
+	// file:// 後接 / 開頭的路徑，authority 為空；//tmp/x.db 會變成 file:////tmp/x.db，不會把 tmp 當成主機名。
+	return "file://" + esc + "?" + pragmas
+}
+
+func Open(path string) (*Store, error) {
+	// PRAGMA 是逐條連線生效，_pragma 參數讓連線池的每條連線都套用（見 sqliteDSN）。
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, err
 	}
