@@ -12,8 +12,8 @@ import (
 func TestStream(t *testing.T) {
 	var lines []string
 	res := Run(context.Background(), "echo hello && echo world", "", 10*time.Second, func(l string) { lines = append(lines, l) })
-	if res.ExitCode != 0 || strings.Join(lines, ",") != "hello,world" {
-		t.Fatalf("exit=%d lines=%v", res.ExitCode, lines)
+	if res.ExitCode != 0 || res.Truncated || strings.Join(lines, ",") != "hello,world" {
+		t.Fatalf("exit=%d truncated=%v lines=%v", res.ExitCode, res.Truncated, lines)
 	}
 }
 func TestNonzero(t *testing.T) {
@@ -53,6 +53,10 @@ func TestLongLineDoesNotHang(t *testing.T) {
 	res := Run(context.Background(), cmd, "", 10*time.Second, func(l string) { lines = append(lines, l) })
 	if d := time.Since(start); d > 3*time.Second || res.ExitCode != 0 {
 		t.Fatalf("long line: took %v exit=%d", d, res.ExitCode)
+	}
+	// 超長行要讓呼叫端知道輸出被截斷，server 端的 job log 才能提示
+	if !res.Truncated {
+		t.Fatal("超長行應回報 Truncated=true")
 	}
 	// 警告走 agent log，不經 onLine：onLine 也用於版本偵測，警告文字會被誤解析
 	if len(lines) != 0 {

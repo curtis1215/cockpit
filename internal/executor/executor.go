@@ -11,7 +11,10 @@ import (
 	"time"
 )
 
-type Result struct{ ExitCode int }
+type Result struct {
+	ExitCode  int
+	Truncated bool // 單行超過 1MB，其後輸出已略過
+}
 
 func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine func(string)) Result {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
@@ -47,10 +50,12 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 			onLine(line)
 		}
 	}
+	truncated := false
 	if sc.Err() != nil {
 		// 超時關閉 pipe 也會讓 Scan 出錯，只有單行超限才記錄
 		// 警告不走 onLine：onLine 也用於版本偵測，警告文字會被誤解析成版本
 		if errors.Is(sc.Err(), bufio.ErrTooLong) {
+			truncated = true
 			log.Printf("executor: 輸出單行超過 1MB，其餘輸出略過")
 		}
 		// Scanner 停讀後不排空 pipe，子程序會卡在寫入直到 timeout
@@ -60,9 +65,9 @@ func Run(ctx context.Context, cmd, cwd string, timeout time.Duration, onLine fun
 	close(done)
 	// 脫離群組的孤兒行程可能讓 shell 以 0 結束，超時一律視為失敗
 	if ctx.Err() == context.DeadlineExceeded {
-		return Result{ExitCode: -1}
+		return Result{ExitCode: -1, Truncated: truncated}
 	}
-	return Result{ExitCode: exitCode(err)}
+	return Result{ExitCode: exitCode(err), Truncated: truncated}
 }
 
 func exitCode(err error) int {

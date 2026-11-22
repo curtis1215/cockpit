@@ -108,6 +108,49 @@ func TestRunJobFailure(t *testing.T) {
 	}
 }
 
+// TestRunJobReportsTruncationToJobLog: 指令輸出超過單行上限時，server 的 job log 要看得到截斷提示，
+// 不能只留在 agent 本機 log。
+func TestRunJobReportsTruncationToJobLog(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows 無 head/tr")
+	}
+	const hint = "■ 輸出單行超過 1MB，其餘輸出略過"
+	var mu sync.Mutex
+	var logLines []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			logLines = append(logLines, body.Lines...)
+			mu.Unlock()
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 14, ShellCmd: `head -c 2000000 /dev/zero | tr '\0' a; echo`, CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	n := 0
+	for _, l := range logLines {
+		if l == hint {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Fatalf("job log 應含一次截斷提示，實際 %d 次: %q", n, logLines)
+	}
+}
+
 func endsWith(s, suf string) bool { return len(s) >= len(suf) && s[len(s)-len(suf):] == suf }
 
 func TestPollOnce(t *testing.T) {

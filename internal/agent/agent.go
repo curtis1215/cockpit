@@ -455,6 +455,10 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 		logs.run(logStop)
 	}()
 	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
+	// 截斷只寫 job log：server 看不到 agent 本機 log；版本偵測的 Run 不經這裡
+	if res.Truncated {
+		logs.add("■ 輸出單行超過 1MB，其餘輸出略過")
+	}
 	// 只讀一次：log 與結果必須一致，abort 若在此之後才到，就視為指令已正常完成。
 	wasAborted := aborted.Load()
 	status, newVer := "success", ""
