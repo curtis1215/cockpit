@@ -529,11 +529,17 @@
     streamJob(job);
   }
 
-  function streamJob(job) {
+  function streamJob(job, opts) {
     const es = new EventSource(`/api/jobs/${job.id}/log/stream`);
     state.streams = state.streams || {};
     state.streams[job.id] = es;
+    let replaying = !!opts?.replay;   // 列表快照需由 SSE 第一行完整 log 取代
     es.addEventListener("log", (e) => {
+      if (replaying) {
+        replaying = false;
+        job.log = [];
+        if (state.activeJobId === job.id) renderCurrentJob(job);
+      }
       job.log.push(e.data);
       appendLogLine(job, e.data);
     });
@@ -818,11 +824,11 @@
       const jobId = jb.getAttribute("data-job");
       const cached = state.jobs.find((j) => j.id === jobId);
       if (cached) {
-        // 執行中但沒有串流（例如重新整理後）：列表 log 只是尾端快照，清空後 SSE 會從第一行重送完整 log
+        // 執行中但沒有串流（例如重新整理後）：列表 log 只是尾端快照；SSE 從第一行重送完整 log，
+        // 收到第一行時才取代快照，連不上則保留快照
         const resume = cached.status === "running" && !state.streams?.[cached.id];
-        if (resume) cached.log = [];
         state.activeJobId = cached.id; renderCurrentJob(cached); renderRecentJobs();
-        if (resume) streamJob(cached);
+        if (resume) streamJob(cached, { replay: true });
         // 若 job 已結束，重抓最新資料再更新顯示
         if (cached.status !== "running") {
           api(`/api/jobs/${encodeURIComponent(jobId)}`).then((raw) => {
