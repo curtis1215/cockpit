@@ -307,10 +307,12 @@ func (a *Agent) ReportVersions(execTimeout time.Duration) {
 }
 
 const (
-	logBatchSize    = 50      // 緩衝剛好達到這個行數就喚醒背景 sender（非阻塞，add 本身不送）
-	logBufMax       = 5000    // shortcut: 送不出去時最多暫存 5000 行且總計 4MiB，超過丟最舊的；要完整保留就改成落地暫存檔
-	logBufMaxBytes  = 4 << 20 // 5000 行 × 近 1MiB 會占用數 GiB，所以另設位元組上限
-	logPostMaxBytes = 1 << 20 // 單次 POST 的位元組上限，超過就分批送
+	logBatchSize       = 50          // 緩衝剛好達到這個行數就喚醒背景 sender（非阻塞，add 本身不送）
+	logBufMax          = 5000        // shortcut: 送不出去時最多暫存 5000 行且總計 4MiB，超過丟最舊的；要完整保留就改成落地暫存檔
+	logBufMaxBytes     = 4 << 20     // 5000 行 × 近 1MiB 會占用數 GiB，所以另設位元組上限
+	logPostMaxBytes    = 1 << 20     // 單次 POST 的位元組上限，超過就分批送
+	logFinalFlushTries = 3           // job 結束後最後一次 flush 的嘗試次數（含第一次）
+	logFinalFlushWait  = time.Second // 最後 flush 每次嘗試之間的間隔
 )
 
 // logBatcher 把 job log 攢成批次送出，避免每行一次 HTTP 拖慢指令輸出。
@@ -356,7 +358,7 @@ func (b *logBatcher) run(stop <-chan struct{}) {
 }
 
 // flush 把整個緩衝分批送出（每次 POST ≤ logPostMaxBytes）；失敗就把未送出的行放回最前面，下次再送。
-func (b *logBatcher) flush() {
+func (b *logBatcher) flush() error {
 	b.sendMu.Lock()
 	defer b.sendMu.Unlock()
 	b.bufMu.Lock()
@@ -369,12 +371,31 @@ func (b *logBatcher) flush() {
 			size += len(pending[n])
 			n++
 		}
-		if b.send(pending[:n]) != nil {
+		if err := b.send(pending[:n]); err != nil {
 			b.requeue(pending)
-			return
+			return err
 		}
 		pending = pending[n:]
 	}
+	return nil
+}
+
+// finalFlush 在背景 sender 停止後呼叫：最多嘗試 logFinalFlushTries 次，全部失敗就放棄並記 log。
+// 呼叫端仍須回報 result，不能因 log 送不出去而不結束 job。
+func (b *logBatcher) finalFlush() {
+	var err error
+	for i := 0; i < logFinalFlushTries; i++ {
+		if i > 0 {
+			time.Sleep(logFinalFlushWait)
+		}
+		if err = b.flush(); err == nil {
+			return
+		}
+	}
+	b.bufMu.Lock()
+	n := len(b.buf)
+	b.bufMu.Unlock()
+	log.Printf("agent: job log 最後 flush 失敗，放棄 %d 行: %v", n, err)
 }
 
 // requeue 把未送出的行放回緩衝最前面，超過上限就丟最舊的。
@@ -403,14 +424,14 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var aborted atomic.Bool
-	stop := make(chan struct{})
-	defer close(stop)
+	ctlStop, ctlDone := make(chan struct{}), make(chan struct{})
 	go func() {
+		defer close(ctlDone)
 		tk := time.NewTicker(controlInterval)
 		defer tk.Stop()
 		for {
 			select {
-			case <-stop:
+			case <-ctlStop:
 				return
 			case <-tk.C:
 				var ctrl struct {
@@ -428,12 +449,22 @@ func (a *Agent) RunJob(job Job, controlInterval, execTimeout time.Duration) {
 		_, err := a.c().PostJSON(fmt.Sprintf("/api/agent/jobs/%d/log", job.ID), a.Token, map[string]any{"lines": lines}, nil)
 		return err
 	}}
-	go logs.run(stop)
+	logStop, logDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(logDone)
+		logs.run(logStop)
+	}()
 	res := executor.Run(ctx, job.ShellCmd, job.Cwd, execTimeout, logs.add)
 	if aborted.Load() {
 		logs.add("■ 已由使用者中止")
 	}
-	logs.flush() // log 必須早於 result 送達
+	// 先停掉背景的 abort 輪詢與 log sender 並等它們結束：之後只剩這個 goroutine 打 API，
+	// 最後的 flush 不與它們併發，且 log 必須早於 result 送達。
+	close(ctlStop)
+	close(logStop)
+	<-ctlDone
+	<-logDone
+	logs.finalFlush()
 	if aborted.Load() {
 		a.reportResult(job.ID, "aborted", res.ExitCode, "")
 		return

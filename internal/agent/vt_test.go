@@ -206,6 +206,91 @@ func TestRunJobBatchesLogs(t *testing.T) {
 	}
 }
 
+// TestRunJobRetriesFinalLogFlushBeforeResult: 最後的 flush 前兩次回 500、第三次成功，
+// 所有行都要送達，且所有 /log 請求（含失敗的）都必須早於 /result。
+func TestRunJobRetriesFinalLogFlushBeforeResult(t *testing.T) {
+	var mu sync.Mutex
+	var delivered []string
+	var order []string // 依到達順序記錄 "log" / "result"
+	logCalls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			var body struct {
+				Lines []string `json:"lines"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			defer mu.Unlock()
+			logCalls++
+			order = append(order, "log")
+			if logCalls <= 2 {
+				w.WriteHeader(500)
+				return
+			}
+			delivered = append(delivered, body.Lines...)
+			w.WriteHeader(204)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			order = append(order, "result")
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 10, ShellCmd: "echo line1; echo line2; echo line3", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	if got := fmt.Sprint(delivered); got != "[line1 line2 line3]" {
+		t.Fatalf("delivered=%s, want [line1 line2 line3]; order=%v", got, order)
+	}
+	if n := len(order); n < 4 || order[n-1] != "result" {
+		t.Fatalf("order=%v: want >=3 /log attempts then /result", order)
+	}
+	for _, o := range order[:len(order)-1] {
+		if o != "log" {
+			t.Fatalf("order=%v: all /log must precede /result", order)
+		}
+	}
+}
+
+// TestRunJobGivesUpFinalLogFlushButReportsResult: 最後的 flush 連續 3 次失敗就放棄，但 result 仍要回報。
+func TestRunJobGivesUpFinalLogFlushButReportsResult(t *testing.T) {
+	var mu sync.Mutex
+	logAttempts := 0
+	var result map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case endsWith(r.URL.Path, "/log"):
+			mu.Lock()
+			logAttempts++
+			mu.Unlock()
+			w.WriteHeader(500)
+		case endsWith(r.URL.Path, "/control"):
+			w.Write([]byte(`{"abort":false}`))
+		case endsWith(r.URL.Path, "/result"):
+			mu.Lock()
+			json.NewDecoder(r.Body).Decode(&result)
+			mu.Unlock()
+			w.Write([]byte(`{}`))
+		}
+	}))
+	defer srv.Close()
+	a := &Agent{ServerURL: srv.URL, Token: "tok", Version: "0.1.0"}
+	a.RunJob(Job{ID: 11, ShellCmd: "echo x", CurrentCmd: "true"}, 2*time.Second, 10*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if logAttempts != logFinalFlushTries {
+		t.Fatalf("log attempts=%d, want %d", logAttempts, logFinalFlushTries)
+	}
+	if result["status"] != "success" {
+		t.Fatalf("result=%v, want success", result)
+	}
+}
+
 // TestLogBatcherRetriesFailedBatchInOrder: 送出失敗的整批要放回緩衝最前面，下次照原順序再送。
 func TestLogBatcherRetriesFailedBatchInOrder(t *testing.T) {
 	var sent []string
