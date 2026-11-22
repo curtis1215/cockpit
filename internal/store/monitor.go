@@ -328,7 +328,8 @@ func (s *Store) Downsample(now int64) error {
 			return err
 		}
 		if wm.Valid {
-			lb = wm.Int64
+			// 時鐘曾快跳時水位可能在未來，上限 now-保留期；否則校正後新樣本全被過濾，直到時間追上才恢復
+			lb = min(wm.Int64, now-srcRetain(lv.Src))
 		}
 		lb = (lb + B - 1) / B * B
 		_, err = s.db.Exec(`

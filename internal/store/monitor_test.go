@@ -360,3 +360,23 @@ func TestDownsampleWithoutWatermarkRecomputesPartialFirstBucket(t *testing.T) {
 		t.Fatalf("partial first bucket not updated: %+v", pts)
 	}
 }
+
+func TestDownsampleIgnoresFutureWatermarkAfterClockRewind(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 伺服器時鐘曾快跳：水位寫在遠未來。時鐘校正後，正常時間的 1m 樣本不得被水位過濾掉。
+	if err := s.SetSetting("metrics_prune_wm:1m", "10000000"); err != nil {
+		t.Fatal(err)
+	}
+	// now=9000 的 1m 保留期內樣本 [1800,2700)，cpu 10..24，平均 17
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(1800 + 60*i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("15m bucket missing under future watermark: %+v", pts)
+	}
+}
