@@ -580,18 +580,17 @@ func (s *Store) DeleteInstall(software, machine string) error {
 
 // CreateJobUnique creates a job only if no queued/running job exists for (software,machine).
 // Returns the new job ID, or 0 if a duplicate exists.
+// 檢查與插入必須在同一條語句內完成，否則並發請求會各自通過檢查而重複建立。
 func (s *Store) CreateJobUnique(software, machine, kind, runner string) (int64, error) {
-	var existing int
-	err := s.db.QueryRow(`SELECT 1 FROM jobs WHERE software=? AND machine=? AND status IN ('queued','running') LIMIT 1`, software, machine).Scan(&existing)
-	if err == nil {
-		return 0, nil
-	}
-	if err != sql.ErrNoRows {
-		return 0, err
-	}
-	res, err := s.db.Exec(`INSERT INTO jobs (software,machine,kind,runner) VALUES (?,?,?,?)`, software, machine, kind, nullStr(runner))
+	res, err := s.db.Exec(`INSERT INTO jobs (software,machine,kind,runner)
+		SELECT ?,?,?,? WHERE NOT EXISTS (
+		  SELECT 1 FROM jobs WHERE software=? AND machine=? AND status IN ('queued','running'))`,
+		software, machine, kind, nullStr(runner), software, machine)
 	if err != nil {
 		return 0, err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return 0, nil
 	}
 	return res.LastInsertId()
 }
