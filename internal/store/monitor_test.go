@@ -179,11 +179,11 @@ func TestDownsampleSkipsPartiallyPrunedBucket(t *testing.T) {
 	if len(before) != 1 || *before[0].CPU != 17 {
 		t.Fatalf("15m before prune: %+v", before)
 	}
-	// 模擬 prune：刪掉該桶前半段（ts < 450）的 1m 列
-	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < 450`); err != nil {
+	// 真實 prune：now=7650 → 1m cutoff=450，刪掉該桶前半段（ts < 450）並記下水位 450
+	if err := s.PruneMetrics(7650); err != nil {
 		t.Fatal(err)
 	}
-	// now=9000 → 1m 最早仍存在的 ts=450，向上取整到 900 邊界得 lb=900，該桶 0 < 900 不再重算
+	// now=9000：水位 450 向上取整到 900 邊界得 lb=900，該桶 0 < 900 不再重算
 	if err := s.Downsample(9000); err != nil {
 		t.Fatal(err)
 	}
@@ -207,5 +207,58 @@ func TestDownsampleCatchesUpAfterOutageLongerThanRetention(t *testing.T) {
 	pts, _ := s.QueryMetrics(id, "15m", 0)
 	if len(pts) != 1 || *pts[0].CPU != 17 {
 		t.Fatalf("15m after outage: %+v", pts)
+	}
+}
+
+func TestDownsampleAggregatesFirstBucketWhenNotOnBoundary(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	// 從未 prune，第一筆 ts=60 不在 900 邊界上：[0,900) 桶仍須聚合（ts 60..840，cpu 11..24，平均 17.5）
+	for i := 1; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17.5 {
+		t.Fatalf("first bucket not aggregated: %+v", pts)
+	}
+}
+
+func TestDownsampleKeepsPartiallyPrunedBucketAfterLateSample(t *testing.T) {
+	s := mOpen(t)
+	id, _ := s.EnsureSystemForMachine("mac")
+	for i := 0; i < 15; i++ {
+		s.InsertMetric(id, "1m", MetricRow{TS: int64(60 * i), CPU: f(float64(10 + i)), Mem: f(50)})
+	}
+	if err := s.Downsample(1200); err != nil {
+		t.Fatal(err)
+	}
+	// 真實 prune 到水位 450（刪 ts < 450），再補一筆比水位更舊的遲到樣本 ts=0
+	if err := s.PruneMetrics(7650); err != nil {
+		t.Fatal(err)
+	}
+	s.InsertMetric(id, "1m", MetricRow{TS: 0, CPU: f(100), Mem: f(50)})
+	if err := s.Downsample(9000); err != nil {
+		t.Fatal(err)
+	}
+	// 舊實作 MIN(ts)=0 會把部分 prune 的 [0,900) 桶用殘缺資料重算；水位 450 須保住原值 17
+	pts, _ := s.QueryMetrics(id, "15m", 0)
+	if len(pts) != 1 || *pts[0].CPU != 17 {
+		t.Fatalf("partially pruned bucket recomputed: %+v", pts)
+	}
+}
+
+func TestPruneWatermarkNeverMovesBack(t *testing.T) {
+	s := mOpen(t)
+	if err := s.PruneMetrics(7650); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PruneMetrics(7000); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.GetSetting("metrics_prune_wm:1m"); got != "450" {
+		t.Fatalf("watermark moved back: %q", got)
 	}
 }

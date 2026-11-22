@@ -3,6 +3,9 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"math"
+	"strconv"
 )
 
 type MetricRow struct {
@@ -301,21 +304,29 @@ var dsLevels = []struct {
 const retain1m = 2 * 3600
 
 // Downsample：把 src 聚合進 dst，依 bucket_start = (ts/BucketSec)*BucketSec 分組。冪等（INSERT OR REPLACE）。
-// 下限 lb 取每個 system 在 src 中實際存在的最早 ts，向上取整到桶邊界：prune 只在服務運行時執行，
-// 停機超過保留期時舊來源仍在 DB，不能用 now-保留期推算。最早那個桶可能已被 prune 切掉一部分，故不重算。
+// 下限取來源 type 的 prune 水位 wm（PruneMetrics 記錄），向上取整到桶邊界：水位之前的桶可能已被部分刪除，不重算。
+// 無水位（從未 prune）則不設下限，停機超過保留期時舊來源仍會聚合。
 // ts < now 保留，最新的未完結桶仍會持續更新（趨勢圖需要）。
 func (s *Store) Downsample(now int64) error {
 	for _, lv := range dsLevels {
 		B := lv.BucketSec
-		_, err := s.db.Exec(`
-			WITH lb AS (SELECT system_id, ((MIN(ts)+?-1)/?)*? AS lb FROM metrics WHERE type=? GROUP BY system_id)
+		lb := int64(math.MinInt64)
+		var wm sql.NullInt64
+		err := s.db.QueryRow(`SELECT CAST(value AS INTEGER) FROM settings WHERE key=?`, "metrics_prune_wm:"+lv.Src).Scan(&wm)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		if wm.Valid {
+			lb = (wm.Int64 + B - 1) / B * B
+		}
+		_, err = s.db.Exec(`
 			INSERT OR REPLACE INTO metrics (system_id,type,ts,cpu,mem,disk,gpu,net_up,net_down,load,temp)
 			SELECT m.system_id, ?, (m.ts/?)*?,
 			  AVG(m.cpu), AVG(m.mem), AVG(m.disk), AVG(m.gpu), AVG(m.net_up), AVG(m.net_down), AVG(m.load), AVG(m.temp)
-			FROM metrics m JOIN lb ON lb.system_id=m.system_id
-			WHERE m.type=? AND m.ts<? AND m.ts>=lb.lb
+			FROM metrics m
+			WHERE m.type=? AND m.ts<? AND m.ts>=?
 			GROUP BY m.system_id, m.ts/?`,
-			B, B, B, lv.Src, lv.Dst, B, B, lv.Src, now, B)
+			lv.Dst, B, B, lv.Src, now, lb, B)
 		if err != nil {
 			return err
 		}
@@ -323,17 +334,29 @@ func (s *Store) Downsample(now int64) error {
 	return nil
 }
 
-// PruneMetrics：刪各 type 超過保留期的列。
+// PruneMetrics：刪各 type 超過保留期的列，並記下各 type 的 cutoff 作為水位。
 func (s *Store) PruneMetrics(now int64) error {
-	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type='1m' AND ts < ?`, now-retain1m); err != nil {
+	if err := s.pruneType("1m", now-retain1m); err != nil {
 		return err
 	}
 	for _, lv := range dsLevels {
-		if _, err := s.db.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, lv.Dst, now-lv.RetainSec); err != nil {
+		if err := s.pruneType(lv.Dst, now-lv.RetainSec); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// pruneType 刪 typ 中 ts < cutoff 的列，並把 cutoff 寫入水位 key。水位只增不減，舊的較小 cutoff 不能把它往回拉。
+func (s *Store) pruneType(typ string, cutoff int64) error {
+	if _, err := s.db.Exec(`DELETE FROM metrics WHERE type=? AND ts < ?`, typ, cutoff); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`INSERT INTO settings (key, value) VALUES (?, ?)
+		ON CONFLICT(key) DO UPDATE SET value = excluded.value
+		WHERE CAST(excluded.value AS INTEGER) > CAST(settings.value AS INTEGER)`,
+		"metrics_prune_wm:"+typ, strconv.FormatInt(cutoff, 10))
+	return err
 }
 
 // TouchSystem updates last_seen and sets status=online for a system.
